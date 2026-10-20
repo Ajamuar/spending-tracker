@@ -465,7 +465,7 @@ private fun DashboardScreen(
         val alerts = budgetAlerts(state)
         if (alerts.isNotEmpty()) {
             item { SectionTitle("Budget alerts", "Categories at 80% or more of their limit") }
-            items(alerts, key = { it.category.id }) { alert ->
+            items(alerts, key = { "alert-${it.category.id}" }) { alert ->
                 BudgetAlertCard(alert)
             }
         }
@@ -481,7 +481,7 @@ private fun DashboardScreen(
                 )
             }
         } else {
-            items(categoryTotals.take(5), key = { it.first.id }) { (category, total) ->
+            items(categoryTotals.take(5), key = { "category-${it.first.id}" }) { (category, total) ->
                 CategoryProgress(
                     category = category,
                     total = total,
@@ -496,7 +496,7 @@ private fun DashboardScreen(
                 EmptyCard("No merchant totals yet", "Merchant spending will appear after an expense is added.")
             }
         } else {
-            items(merchantSpending.take(5), key = { it.first }) { (merchant, total) ->
+            items(merchantSpending.take(5), key = { "merchant-${it.first}" }) { (merchant, total) ->
                 MerchantProgress(
                     merchant = merchant,
                     total = total,
@@ -510,7 +510,7 @@ private fun DashboardScreen(
                 EmptyCard("A clean slate", "Your imported and manual transactions will appear here.")
             }
         } else {
-            items(state.monthTransactions.take(6), key = TransactionEntity::id) {
+            items(state.monthTransactions.take(6), key = { "recent-${it.id}" }) {
                 TransactionRow(
                     transaction = it,
                     category = state.categories.firstOrNull { category -> category.id == it.categoryId },
