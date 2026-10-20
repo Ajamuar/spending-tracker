@@ -13,9 +13,10 @@ UPI PINs, OTPs, payment APIs, lending features, or RBI Account Aggregator access
 - Read-only Gmail import using a user-owned Google Cloud OAuth client
 - Indian rupee amounts, debit/credit/refund/reversal/failed-payment parsing
 - Merchant/category suggestions with editable categories and parser confidence
-- Monthly overview, transaction search, category breakdowns, and budgets
+- Monthly overview, category and merchant breakdowns, searchable review queue, and budgets
+- In-app budget alerts plus editable and archivable local accounts
 - Manual entries and corrections
-- Cross-source deduplication around amount, time, account hint, and merchant
+- Cross-source deduplication using references plus amount, time, account hint, and merchant
 - CSV import/export
 - Password-encrypted backup and restore
 - SQLCipher ledger encryption with a random key protected by Android Keystore
@@ -25,7 +26,8 @@ UPI PINs, OTPs, payment APIs, lending features, or RBI Account Aggregator access
 
 Raw SMS and Gmail bodies are read only long enough to extract a normalized transaction. The
 database stores amount, type, merchant, category, timestamp, source, confidence, optional account
-suffix, and a one-way source fingerprint. OTP/authentication messages are rejected.
+suffix, persisted parser rules, and one-way source fingerprints. OTP/authentication messages are
+rejected. SMS sender and transaction-keyword filters run before normalization.
 
 The app disables Android cloud backup and device-to-device transfer. The database is encrypted
 with SQLCipher. Exported CSV files are intentionally readable; encrypted `.myexpenses` backups use
@@ -105,7 +107,17 @@ always requests a fresh cached access token. If consent expires, the app asks yo
 
 The parser deliberately favors false negatives over turning OTPs or personal messages into
 transactions. Indian banks change SMS and email templates without notice, so every imported item
-shows a confidence score and remains editable.
+shows a confidence score and remains editable. Low-confidence and non-posted imports appear in the
+**Needs review** filter.
+
+Parser templates are persisted in the encrypted `parser_rules` table. The app seeds generic UPI,
+card, and bank debit/credit rules. A rule can constrain the sender/body with regular expressions and
+optionally override merchant extraction or category assignment. To add a bank template:
+
+1. Add a fully synthetic message to `TransactionParserTest`.
+2. Add or seed a narrowly scoped `ParserRuleEntity`; never use a real sender, account, reference, or
+   merchant history.
+3. Run the parser and repository tests, then verify the message on an emulator.
 
 Synthetic parser fixtures live in:
 
@@ -113,9 +125,11 @@ Synthetic parser fixtures live in:
 app/src/test/java/com/myexpenses/ingestion/TransactionParserTest.kt
 ```
 
-To support another format, add a synthetic, anonymized case first and then extend
-`TransactionParser`. Never paste an actual account number, UTR, email, phone number, or merchant
-history into a test fixture.
+They cover SMS/email debits, credits, same-reference duplicates, reversals, transfers, failed and
+malformed payments, custom parser rules, keyword filtering, and OTP rejection. Instrumented
+repository tests exercise the local-ledger schema, parser-rule seeding, account lifecycle, and
+cross-source deduplication. Never paste an actual account number, UTR, email, phone number, or
+merchant history into a test fixture.
 
 ## Tests
 
@@ -142,6 +156,8 @@ adb emu sms send VM-HDFCBK "Rs.249.00 debited from a/c XX4821 and paid to TEST C
 - OEM battery controls can delay receivers and WorkManager. A manual rescan is available.
 - The generic parser cannot identify every own-account transfer or credit-card repayment. Review
   these transactions and exclude duplicates from totals.
+- Budget alerts are visible inside the app; this private build does not post financial details as
+  Android notifications.
 - Google Play distribution with `READ_SMS`/`RECEIVE_SMS` requires a sensitive-permission
   declaration and approval for the SMS-based money-management exception. This private build is
   intended for sideloading first.
