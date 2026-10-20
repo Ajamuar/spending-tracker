@@ -2,11 +2,14 @@ package com.myexpenses.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.myexpenses.data.local.AccountDao
 import com.myexpenses.data.local.AppDatabase
 import com.myexpenses.data.local.BudgetDao
 import com.myexpenses.data.local.CategoryDao
 import com.myexpenses.data.local.IngestionDao
+import com.myexpenses.data.local.ParserRuleDao
 import com.myexpenses.data.local.TransactionDao
 import com.myexpenses.security.DatabaseKeyManager
 import dagger.Module
@@ -33,6 +36,7 @@ object AppModule {
             AppDatabase::class.java,
             context.getDatabasePath("my-expenses.db").absolutePath,
         )
+            .addMigrations(MIGRATION_1_2)
             .openHelperFactory(factory)
             .build()
     }
@@ -51,4 +55,32 @@ object AppModule {
 
     @Provides fun provideIngestionDao(database: AppDatabase): IngestionDao =
         database.ingestionDao()
+
+    @Provides fun provideParserRuleDao(database: AppDatabase): ParserRuleDao =
+        database.parserRuleDao()
+
+    private val MIGRATION_1_2 = object : Migration(1, 2) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `parser_rules` (
+                    `id` TEXT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `senderRegex` TEXT,
+                    `bodyRegex` TEXT NOT NULL,
+                    `merchantRegex` TEXT,
+                    `categoryName` TEXT,
+                    `priority` INTEGER NOT NULL,
+                    `isEnabled` INTEGER NOT NULL,
+                    `isSystem` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent(),
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_parser_rules_priority` " +
+                    "ON `parser_rules` (`priority`)",
+            )
+        }
+    }
 }

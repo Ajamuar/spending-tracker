@@ -1,6 +1,7 @@
 package com.myexpenses.ingestion
 
 import com.myexpenses.data.model.SourceType
+import com.myexpenses.data.model.ParserRuleEntity
 import com.myexpenses.data.model.TransactionStatus
 import com.myexpenses.data.model.TransactionType
 import java.math.BigDecimal
@@ -41,13 +42,21 @@ sealed interface ParseResult {
 
 @Singleton
 class TransactionParser @Inject constructor() {
-    fun parse(input: ParseInput): ParseResult {
+    fun parse(
+        input: ParseInput,
+        rules: List<ParserRuleEntity> = emptyList(),
+    ): ParseResult {
         val plainText = stripHtml(input.body)
         val combined = listOfNotNull(input.subject, plainText)
             .joinToString(" ")
             .replace(whitespace, " ")
             .trim()
         val fingerprint = Hashing.sha256(normalizeForFingerprint(combined))
+        val matchingRule = rules
+            .asSequence()
+            .filter(ParserRuleEntity::isEnabled)
+            .sortedBy(ParserRuleEntity::priority)
+            .firstOrNull { it.matches(input.sender, combined) }
 
         if (combined.isBlank()) return ParseResult.Ignored("Empty message", fingerprint)
         if (otpCode.containsMatchIn(combined) ||
@@ -79,15 +88,18 @@ class TransactionParser @Inject constructor() {
         val referenceHash = referencePatterns.firstNotNullOfOrNull { pattern ->
             pattern.find(combined)?.groupValues?.get(1)?.take(32)
         }?.let(Hashing::sha256)
-        val merchant = inferMerchant(combined, input.sender, type)
-        val category = inferCategory(merchant, lower, type)
+        val merchant = matchingRule?.extractMerchant(combined)
+            ?: inferMerchant(combined, input.sender, type)
+        val category = matchingRule?.categoryName?.takeIf(String::isNotBlank)
+            ?: inferCategory(merchant, lower, type)
         val confidence = (
             0.46f +
                 (if (accountHint != null) 0.12f else 0f) +
                 (if (referenceHash != null) 0.12f else 0f) +
                 (if (merchant != input.sender) 0.12f else 0f) +
-                (if (status == TransactionStatus.POSTED) 0.08f else 0f)
-            ).coerceAtMost(0.92f)
+                (if (status == TransactionStatus.POSTED) 0.08f else 0f) +
+                (if (matchingRule != null) 0.04f else 0f)
+            ).coerceAtMost(0.96f)
 
         return ParseResult.Parsed(
             TransactionCandidate(
@@ -179,6 +191,23 @@ class TransactionParser @Inject constructor() {
         .replace(whitespace, " ")
         .trim()
 
+    private fun ParserRuleEntity.matches(sender: String, body: String): Boolean {
+        val senderMatches = senderRegex.isNullOrBlank() ||
+            senderRegex.toSafeRegex()?.containsMatchIn(sender) == true
+        return senderMatches && bodyRegex.toSafeRegex()?.containsMatchIn(body) == true
+    }
+
+    private fun ParserRuleEntity.extractMerchant(body: String): String? {
+        val regex = merchantRegex?.toSafeRegex() ?: return null
+        val match = regex.find(body) ?: return null
+        return match.groupValues.getOrNull(1)
+            ?.trim(' ', '.', ',', '-', ':')
+            ?.takeIf { it.length >= 2 }
+            ?.take(48)
+    }
+
+    private fun String.toSafeRegex(): Regex? = runCatching { Regex(this) }.getOrNull()
+
     private companion object {
         val whitespace = Regex("\\s+")
         val htmlTag = Regex("<[^>]+>", RegexOption.DOT_MATCHES_ALL)
@@ -239,6 +268,34 @@ class TransactionParser @Inject constructor() {
             "Education" to listOf("school", "college", "course", "udemy"),
         )
     }
+}
+
+object TransactionMessageFilter {
+    fun looksTransactional(
+        body: String,
+        rules: List<ParserRuleEntity> = emptyList(),
+    ): Boolean {
+        if (body.isBlank() || authentication.containsMatchIn(body)) return false
+        if (!rupeeAmount.containsMatchIn(body)) return false
+        return action.containsMatchIn(body) || rules.any { rule ->
+            rule.isEnabled &&
+                runCatching { Regex(rule.bodyRegex).containsMatchIn(body) }.getOrDefault(false)
+        }
+    }
+
+    private val rupeeAmount = Regex(
+        """(?:₹|INR|Rs\.?)\s*[0-9]+(?:,[0-9]{2,3})*(?:\.[0-9]{1,2})?""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val action = Regex(
+        """\b(?:debited|credited|spent|paid|purchase|withdrawn|sent|received|deposited|""" +
+            """refund(?:ed)?|reversal|reversed|failed|declined|payment)\b""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val authentication = Regex(
+        """\b(?:otp|one[ -]?time password|passcode|verification code|cvv|pin)\b""",
+        RegexOption.IGNORE_CASE,
+    )
 }
 
 object Hashing {

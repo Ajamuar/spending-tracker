@@ -16,6 +16,7 @@ import com.myexpenses.data.model.BudgetEntity
 import com.myexpenses.data.model.CategoryEntity
 import com.myexpenses.data.model.IngestionOutcome
 import com.myexpenses.data.model.IngestionRecordEntity
+import com.myexpenses.data.model.ParserRuleEntity
 import com.myexpenses.data.model.SourceType
 import com.myexpenses.data.model.TransactionEntity
 import com.myexpenses.data.model.TransactionStatus
@@ -65,6 +66,23 @@ interface TransactionDao {
         target: Long,
     ): List<TransactionEntity>
 
+    @Query(
+        """
+        SELECT * FROM transactions
+        WHERE referenceHash = :referenceHash
+          AND amountMinor = :amountMinor
+          AND type = :type
+          AND status != 'FAILED'
+        ORDER BY occurredAt DESC
+        LIMIT 1
+        """,
+    )
+    suspend fun findByReference(
+        referenceHash: String,
+        amountMinor: Long,
+        type: TransactionType,
+    ): TransactionEntity?
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(entity: TransactionEntity): Long
 
@@ -107,11 +125,17 @@ interface CategoryDao {
 
 @Dao
 interface AccountDao {
+    @Query("SELECT * FROM accounts ORDER BY isArchived, name")
+    fun observeAll(): Flow<List<AccountEntity>>
+
     @Query("SELECT * FROM accounts WHERE isArchived = 0 ORDER BY name")
     fun observeActive(): Flow<List<AccountEntity>>
 
     @Query("SELECT * FROM accounts ORDER BY name")
     suspend fun getAll(): List<AccountEntity>
+
+    @Query("SELECT * FROM accounts WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): AccountEntity?
 
     @Query("SELECT * FROM accounts WHERE name = :name COLLATE NOCASE LIMIT 1")
     suspend fun getByName(name: String): AccountEntity?
@@ -175,6 +199,24 @@ interface IngestionDao {
     suspend fun deleteAll()
 }
 
+@Dao
+interface ParserRuleDao {
+    @Query("SELECT * FROM parser_rules WHERE isEnabled = 1 ORDER BY priority, name")
+    suspend fun getEnabled(): List<ParserRuleEntity>
+
+    @Query("SELECT * FROM parser_rules ORDER BY priority, name")
+    suspend fun getAll(): List<ParserRuleEntity>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAll(entities: List<ParserRuleEntity>)
+
+    @Upsert
+    suspend fun upsertAll(entities: List<ParserRuleEntity>)
+
+    @Query("DELETE FROM parser_rules")
+    suspend fun deleteAll()
+}
+
 @Database(
     entities = [
         TransactionEntity::class,
@@ -182,8 +224,9 @@ interface IngestionDao {
         AccountEntity::class,
         BudgetEntity::class,
         IngestionRecordEntity::class,
+        ParserRuleEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 @TypeConverters(DatabaseConverters::class)
@@ -193,4 +236,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun accountDao(): AccountDao
     abstract fun budgetDao(): BudgetDao
     abstract fun ingestionDao(): IngestionDao
+    abstract fun parserRuleDao(): ParserRuleDao
 }

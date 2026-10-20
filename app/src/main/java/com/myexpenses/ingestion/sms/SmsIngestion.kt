@@ -14,6 +14,7 @@ import com.myexpenses.data.model.SourceType
 import com.myexpenses.ingestion.Hashing
 import com.myexpenses.ingestion.ParseInput
 import com.myexpenses.ingestion.ParseResult
+import com.myexpenses.ingestion.TransactionMessageFilter
 import com.myexpenses.ingestion.TransactionParser
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -113,6 +114,18 @@ class SmsScanner @Inject constructor(
         body: String,
         timestamp: Long,
     ): IngestionOutcome {
+        val rules = repository.enabledParserRules()
+        if (!TransactionMessageFilter.looksTransactional(body, rules)) {
+            repository.recordIgnored(
+                source = SourceType.SMS,
+                externalId = externalId,
+                fingerprint = Hashing.sha256(
+                    body.lowercase(Locale.ROOT).replace(Regex("\\s+"), " ").trim(),
+                ),
+                reason = "Sender matched, but transaction keywords were not present",
+            )
+            return IngestionOutcome.REJECTED
+        }
         val result = parser.parse(
             ParseInput(
                 externalId = externalId,
@@ -121,6 +134,7 @@ class SmsScanner @Inject constructor(
                 body = body,
                 receivedAt = timestamp,
             ),
+            rules = rules,
         )
         return when (result) {
             is ParseResult.Parsed -> repository.import(result.candidate).outcome

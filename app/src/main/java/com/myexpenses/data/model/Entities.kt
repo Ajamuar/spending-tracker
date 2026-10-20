@@ -159,9 +159,26 @@ data class IngestionRecordEntity(
     val importedAt: Long = System.currentTimeMillis(),
 )
 
+@Entity(
+    tableName = "parser_rules",
+    indices = [Index("priority")],
+)
+data class ParserRuleEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val senderRegex: String? = null,
+    val bodyRegex: String,
+    val merchantRegex: String? = null,
+    val categoryName: String? = null,
+    val priority: Int = 100,
+    val isEnabled: Boolean = true,
+    val isSystem: Boolean = false,
+)
+
 data class LedgerSnapshot(
     val transactions: List<TransactionEntity>,
     val accounts: List<AccountEntity>,
     val categories: List<CategoryEntity>,
     val budgets: List<BudgetEntity>,
+    val parserRules: List<ParserRuleEntity>,
 )

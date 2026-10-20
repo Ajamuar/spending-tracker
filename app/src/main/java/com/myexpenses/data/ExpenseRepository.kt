@@ -6,6 +6,7 @@ import com.myexpenses.data.local.AppDatabase
 import com.myexpenses.data.local.BudgetDao
 import com.myexpenses.data.local.CategoryDao
 import com.myexpenses.data.local.IngestionDao
+import com.myexpenses.data.local.ParserRuleDao
 import com.myexpenses.data.local.TransactionDao
 import com.myexpenses.data.model.AccountEntity
 import com.myexpenses.data.model.AccountType
@@ -14,6 +15,7 @@ import com.myexpenses.data.model.CategoryEntity
 import com.myexpenses.data.model.IngestionOutcome
 import com.myexpenses.data.model.IngestionRecordEntity
 import com.myexpenses.data.model.LedgerSnapshot
+import com.myexpenses.data.model.ParserRuleEntity
 import com.myexpenses.data.model.SourceType
 import com.myexpenses.data.model.TransactionEntity
 import com.myexpenses.data.model.TransactionStatus
@@ -58,12 +60,13 @@ class ExpenseRepository @Inject constructor(
     private val accountDao: AccountDao,
     private val budgetDao: BudgetDao,
     private val ingestionDao: IngestionDao,
+    private val parserRuleDao: ParserRuleDao,
 ) {
     private val importMutex = Mutex()
 
     val transactions: Flow<List<TransactionEntity>> = transactionDao.observeAll()
     val categories: Flow<List<CategoryEntity>> = categoryDao.observeAll()
-    val accounts: Flow<List<AccountEntity>> = accountDao.observeActive()
+    val accounts: Flow<List<AccountEntity>> = accountDao.observeAll()
     val recentIngestion: Flow<List<IngestionRecordEntity>> = ingestionDao.observeRecent()
     val importedCount: Flow<Int> = ingestionDao.observeImportedCount()
 
@@ -72,6 +75,7 @@ class ExpenseRepository @Inject constructor(
 
     suspend fun initialize() {
         categoryDao.insertAll(DEFAULT_CATEGORIES)
+        parserRuleDao.insertAll(DEFAULT_PARSER_RULES)
         if (accountDao.find(AccountType.CASH, null) == null) {
             accountDao.upsert(
                 AccountEntity(
@@ -83,14 +87,23 @@ class ExpenseRepository @Inject constructor(
         }
     }
 
+    suspend fun enabledParserRules(): List<ParserRuleEntity> = parserRuleDao.getEnabled()
+
     suspend fun import(candidate: TransactionCandidate): ImportResult = importMutex.withLock {
         val externalHash = Hashing.sha256(candidate.externalId)
         if (ingestionDao.exists(candidate.source, externalHash)) {
             return ImportResult(IngestionOutcome.DUPLICATE, detail = "Already processed")
         }
 
+        val referenceDuplicate = candidate.referenceHash?.let { referenceHash ->
+            transactionDao.findByReference(
+                referenceHash = referenceHash,
+                amountMinor = candidate.amountMinor,
+                type = candidate.type,
+            )
+        }
         val duplicateWindow = 10 * 60 * 1000L
-        val duplicate = transactionDao.findPotentialDuplicates(
+        val duplicate = referenceDuplicate ?: transactionDao.findPotentialDuplicates(
             amountMinor = candidate.amountMinor,
             type = candidate.type,
             from = candidate.occurredAt - duplicateWindow,
@@ -238,6 +251,37 @@ class ExpenseRepository @Inject constructor(
 
     suspend fun deleteTransaction(id: String) = transactionDao.delete(id)
 
+    suspend fun saveAccount(
+        id: String?,
+        name: String,
+        type: AccountType,
+        lastFour: String?,
+    ) {
+        val normalizedName = name.trim()
+        require(normalizedName.isNotEmpty()) { "Enter an account name" }
+        val normalizedLastFour = lastFour
+            ?.filter(Char::isDigit)
+            ?.takeLast(4)
+            ?.takeIf(String::isNotEmpty)
+        require(normalizedLastFour == null || normalizedLastFour.length >= 3) {
+            "Use the last 3 or 4 digits only"
+        }
+        val current = id?.let { accountDao.getById(it) }
+        accountDao.upsert(
+            (current ?: AccountEntity(name = normalizedName, type = type)).copy(
+                name = normalizedName,
+                type = type,
+                lastFour = normalizedLastFour,
+            ),
+        )
+    }
+
+    suspend fun setAccountArchived(id: String, archived: Boolean) {
+        val account = accountDao.getById(id) ?: return
+        require(account.id != CASH_ACCOUNT_ID || !archived) { "The Cash account stays available" }
+        accountDao.upsert(account.copy(isArchived = archived))
+    }
+
     suspend fun setBudget(categoryId: String, month: YearMonth, limitMinor: Long) {
         if (limitMinor <= 0) {
             budgetDao.delete(categoryId, month.toString())
@@ -258,6 +302,7 @@ class ExpenseRepository @Inject constructor(
         accounts = accountDao.getAll(),
         categories = categoryDao.getAll(),
         budgets = budgetDao.getAll(),
+        parserRules = parserRuleDao.getAll(),
     )
 
     suspend fun importCsv(rows: List<CsvTransactionInput>): Int {
@@ -308,10 +353,12 @@ class ExpenseRepository @Inject constructor(
             transactionDao.deleteAll()
             accountDao.deleteAll()
             categoryDao.deleteAll()
+            parserRuleDao.deleteAll()
             categoryDao.upsertAll(snapshot.categories)
             accountDao.upsertAll(snapshot.accounts)
             transactionDao.upsertAll(snapshot.transactions)
             budgetDao.upsertAll(snapshot.budgets)
+            parserRuleDao.upsertAll(snapshot.parserRules.ifEmpty { DEFAULT_PARSER_RULES })
         }
     }
 
@@ -363,6 +410,30 @@ class ExpenseRepository @Inject constructor(
             category("category-refund", "Refunds", "↩", 0xFF52B788),
             category("category-income", "Income", "₹", 0xFF2D6A4F, isIncome = true),
             category("category-other", "Other", "•", 0xFF7D8597),
+        )
+
+        val DEFAULT_PARSER_RULES = listOf(
+            ParserRuleEntity(
+                id = "system-upi",
+                name = "Indian UPI alert",
+                bodyRegex = """(?i)\b(?:UPI|VPA|UTR)\b""",
+                priority = 10,
+                isSystem = true,
+            ),
+            ParserRuleEntity(
+                id = "system-card",
+                name = "Card transaction alert",
+                bodyRegex = """(?i)\b(?:credit\s+card|debit\s+card|card\s+(?:ending|xx)|POS|ECOM)\b""",
+                priority = 20,
+                isSystem = true,
+            ),
+            ParserRuleEntity(
+                id = "system-bank",
+                name = "Bank debit or credit alert",
+                bodyRegex = """(?i)\b(?:debited|credited|withdrawn|deposited|payment\s+received)\b""",
+                priority = 30,
+                isSystem = true,
+            ),
         )
 
         private fun category(

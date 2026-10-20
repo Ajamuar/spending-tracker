@@ -17,6 +17,7 @@ import com.google.android.gms.common.api.Scope
 import com.myexpenses.data.AppPreferences
 import com.myexpenses.data.ExpenseRepository
 import com.myexpenses.data.model.IngestionOutcome
+import com.myexpenses.data.model.ParserRuleEntity
 import com.myexpenses.data.model.SourceType
 import com.myexpenses.ingestion.ParseInput
 import com.myexpenses.ingestion.ParseResult
@@ -97,6 +98,7 @@ class GmailApiClient @Inject constructor(
         var errors = 0
         var pageToken: String? = null
         var pages = 0
+        val parserRules = repository.enabledParserRules()
 
         while (inspected < maxMessages && pages < MAX_PAGES_PER_SYNC) {
             pages++
@@ -119,7 +121,7 @@ class GmailApiClient @Inject constructor(
                 }
                 inspected++
                 try {
-                    when (processMessage(id, accessToken)) {
+                    when (processMessage(id, accessToken, parserRules)) {
                         IngestionOutcome.IMPORTED -> imported++
                         IngestionOutcome.DUPLICATE -> duplicates++
                         IngestionOutcome.REJECTED -> ignored++
@@ -140,7 +142,11 @@ class GmailApiClient @Inject constructor(
         GmailSyncSummary(inspected, imported, duplicates, ignored, errors)
     }
 
-    private suspend fun processMessage(id: String, accessToken: String): IngestionOutcome {
+    private suspend fun processMessage(
+        id: String,
+        accessToken: String,
+        parserRules: List<ParserRuleEntity>,
+    ): IngestionOutcome {
         val message = getJson("$BASE_URL/messages/$id?format=full", accessToken)
         val payload = message.getJSONObject("payload")
         val headers = payload.optJSONArray("headers")
@@ -169,6 +175,7 @@ class GmailApiClient @Inject constructor(
                     body = body,
                     receivedAt = timestamp,
                 ),
+                rules = parserRules,
             )
         ) {
             is ParseResult.Parsed -> repository.import(parsed.candidate).outcome

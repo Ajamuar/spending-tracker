@@ -7,6 +7,7 @@ import com.myexpenses.data.model.AccountType
 import com.myexpenses.data.model.BudgetEntity
 import com.myexpenses.data.model.CategoryEntity
 import com.myexpenses.data.model.LedgerSnapshot
+import com.myexpenses.data.model.ParserRuleEntity
 import com.myexpenses.data.model.SourceType
 import com.myexpenses.data.model.TransactionEntity
 import com.myexpenses.data.model.TransactionStatus
@@ -131,6 +132,7 @@ class BackupManager @Inject constructor(
         accounts = accounts.map(AccountEntity::toBackup),
         categories = categories.map(CategoryEntity::toBackup),
         budgets = budgets.map(BudgetEntity::toBackup),
+        parserRules = parserRules.map(ParserRuleEntity::toBackup),
     )
 
     private fun BackupEnvelope.toSnapshot() = LedgerSnapshot(
@@ -138,6 +140,7 @@ class BackupManager @Inject constructor(
         accounts = accounts.map(AccountBackup::toEntity),
         categories = categories.map(CategoryBackup::toEntity),
         budgets = budgets.map(BudgetBackup::toEntity),
+        parserRules = parserRules.map(ParserRuleBackup::toEntity),
     )
 
     private fun readLimited(input: InputStream): ByteArray {
@@ -227,6 +230,7 @@ private data class BackupEnvelope(
     val accounts: List<AccountBackup>,
     val categories: List<CategoryBackup>,
     val budgets: List<BudgetBackup>,
+    val parserRules: List<ParserRuleBackup> = emptyList(),
 )
 
 @Serializable
@@ -278,6 +282,19 @@ private data class BudgetBackup(
     val limitMinor: Long,
 )
 
+@Serializable
+private data class ParserRuleBackup(
+    val id: String,
+    val name: String,
+    val senderRegex: String?,
+    val bodyRegex: String,
+    val merchantRegex: String?,
+    val categoryName: String?,
+    val priority: Int,
+    val isEnabled: Boolean,
+    val isSystem: Boolean,
+)
+
 private fun TransactionEntity.toBackup() = TransactionBackup(
     id, amountMinor, type.name, status.name, merchant, accountId, accountHint, categoryId,
     occurredAt, source.name, sourceConfidence, referenceHash, note, isExcluded, createdAt, updatedAt,
@@ -307,6 +324,30 @@ private fun CategoryBackup.toEntity() = CategoryEntity(id, name, icon, color, is
 private fun BudgetEntity.toBackup() = BudgetBackup(id, categoryId, monthKey, limitMinor)
 
 private fun BudgetBackup.toEntity() = BudgetEntity(id, categoryId, monthKey, limitMinor)
+
+private fun ParserRuleEntity.toBackup() = ParserRuleBackup(
+    id,
+    name,
+    senderRegex,
+    bodyRegex,
+    merchantRegex,
+    categoryName,
+    priority,
+    isEnabled,
+    isSystem,
+)
+
+private fun ParserRuleBackup.toEntity() = ParserRuleEntity(
+    id,
+    name,
+    senderRegex,
+    bodyRegex,
+    merchantRegex,
+    categoryName,
+    priority,
+    isEnabled,
+    isSystem,
+)
 
 private inline fun <reified T : Enum<T>> enumOrDefault(value: String, default: T): T =
     enumValues<T>().firstOrNull { it.name == value } ?: default
