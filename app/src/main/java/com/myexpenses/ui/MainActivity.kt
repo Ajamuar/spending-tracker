@@ -5,6 +5,7 @@ import android.accounts.Account
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -87,6 +88,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         enableEdgeToEdge()
         setContent {
             MyExpensesTheme {
@@ -145,11 +147,18 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.refreshSmsPermission()
+    }
+
     private fun requestGmailAuthorization() {
-        val request = AuthorizationRequest.builder()
+        val builder = AuthorizationRequest.builder()
             .setRequestedScopes(listOf(Scope(GMAIL_READONLY_SCOPE)))
-            .build()
-        authorizationClient.authorize(request)
+        viewModel.uiState.value.settings.gmailAccount?.let {
+            builder.setAccount(Account(it, "com.google"))
+        }
+        authorizationClient.authorize(builder.build())
             .addOnSuccessListener { result ->
                 if (result.hasResolution()) {
                     val pendingIntent = result.pendingIntent
@@ -171,15 +180,13 @@ class MainActivity : ComponentActivity() {
             }
     }
 
-    @Suppress("DEPRECATION")
     private fun handleAuthorizationResult(result: AuthorizationResult) {
         val accessToken = result.accessToken
         if (GMAIL_READONLY_SCOPE !in result.grantedScopes || accessToken.isNullOrBlank()) {
             viewModel.onGmailAuthorizationFailed("Read-only Gmail access was not granted")
             return
         }
-        val accountName = result.toGoogleSignInAccount()?.account?.name
-        viewModel.onGmailAuthorized(accessToken, accountName)
+        viewModel.onGmailAuthorized(accessToken)
     }
 
     private fun disconnectGmail() {
@@ -188,6 +195,11 @@ class MainActivity : ComponentActivity() {
             .setScopes(listOf(Scope(GMAIL_READONLY_SCOPE)))
         settings.gmailAccount?.let { builder.setAccount(Account(it, "com.google")) }
         authorizationClient.revokeAccess(builder.build())
-            .addOnCompleteListener { viewModel.disconnectGmail() }
+            .addOnSuccessListener { viewModel.disconnectGmail() }
+            .addOnFailureListener {
+                viewModel.onGmailAuthorizationFailed(
+                    "Gmail could not be disconnected. Check your connection and try again.",
+                )
+            }
     }
 }

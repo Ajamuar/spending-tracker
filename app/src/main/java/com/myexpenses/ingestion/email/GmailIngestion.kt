@@ -55,6 +55,8 @@ class GmailSyncService @Inject constructor(
     suspend fun syncWithToken(accessToken: String): GmailSyncSummary {
         val query = preferences.settings.value.gmailQuery
         return try {
+            val account = apiClient.getProfileEmail(accessToken)
+            preferences.setGmailConnection(true, account)
             apiClient.sync(accessToken, query).also { summary ->
                 preferences.recordGmailSync(
                     status = "Gmail sync: ${summary.imported} new, " +
@@ -79,6 +81,10 @@ class GmailApiClient @Inject constructor(
     private val parser: TransactionParser,
     private val repository: ExpenseRepository,
 ) {
+    suspend fun getProfileEmail(accessToken: String): String = withContext(Dispatchers.IO) {
+        getJson("$BASE_URL/profile", accessToken).getString("emailAddress")
+    }
+
     suspend fun sync(
         accessToken: String,
         query: String,
@@ -90,8 +96,10 @@ class GmailApiClient @Inject constructor(
         var ignored = 0
         var errors = 0
         var pageToken: String? = null
+        var pages = 0
 
-        while (inspected < maxMessages) {
+        while (inspected < maxMessages && pages < MAX_PAGES_PER_SYNC) {
+            pages++
             val listUrl = buildString {
                 append("$BASE_URL/messages?maxResults=100&q=")
                 append(URLEncoder.encode(query, StandardCharsets.UTF_8.name()))
@@ -105,6 +113,10 @@ class GmailApiClient @Inject constructor(
             for (index in 0 until messages.length()) {
                 if (inspected >= maxMessages) break
                 val id = messages.getJSONObject(index).getString("id")
+                val externalId = "gmail:$id"
+                if (repository.isProcessed(SourceType.EMAIL, externalId)) {
+                    continue
+                }
                 inspected++
                 try {
                     when (processMessage(id, accessToken)) {
@@ -115,6 +127,8 @@ class GmailApiClient @Inject constructor(
                     }
                 } catch (authorization: GmailAuthorizationException) {
                     throw authorization
+                } catch (network: IOException) {
+                    throw network
                 } catch (_: Exception) {
                     errors++
                 }
@@ -171,8 +185,14 @@ class GmailApiClient @Inject constructor(
     }
 
     private fun extractBody(payload: JSONObject): String {
+        if (payload.optString("filename").isNotBlank()) return ""
+        val mimeType = payload.optString("mimeType")
         val direct = payload.optJSONObject("body")?.optString("data").orEmpty()
-        if (direct.isNotBlank()) return decodeBody(direct)
+        if (direct.isNotBlank() &&
+            (mimeType.equals("text/plain", true) || mimeType.equals("text/html", true))
+        ) {
+            return decodeBody(direct)
+        }
         val parts = payload.optJSONArray("parts") ?: return ""
         var htmlFallback = ""
         for (index in 0 until parts.length()) {
@@ -216,6 +236,7 @@ class GmailApiClient @Inject constructor(
 
     private companion object {
         const val BASE_URL = "https://gmail.googleapis.com/gmail/v1/users/me"
+        const val MAX_PAGES_PER_SYNC = 20
     }
 }
 

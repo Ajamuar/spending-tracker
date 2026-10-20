@@ -43,6 +43,11 @@ class SmsScanner @Inject constructor(
         ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
             PackageManager.PERMISSION_GRANTED
 
+    fun hasAutomaticPermissions(): Boolean =
+        hasPermission() &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) ==
+            PackageManager.PERMISSION_GRANTED
+
     suspend fun scanInbox(maxMessages: Int = 5_000): SmsScanSummary {
         if (!hasPermission()) throw SecurityException("SMS permission has not been granted")
 
@@ -51,6 +56,7 @@ class SmsScanner @Inject constructor(
         var duplicates = 0
         var ignored = 0
         var errors = 0
+        var examined = 0
         val projection = arrayOf(
             Telephony.Sms._ID,
             Telephony.Sms.ADDRESS,
@@ -68,7 +74,8 @@ class SmsScanner @Inject constructor(
             val senderIndex = cursor.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
             val bodyIndex = cursor.getColumnIndexOrThrow(Telephony.Sms.BODY)
             val dateIndex = cursor.getColumnIndexOrThrow(Telephony.Sms.DATE)
-            while (cursor.moveToNext() && scanned < maxMessages) {
+            while (cursor.moveToNext() && examined < maxMessages) {
+                examined++
                 val sender = cursor.getString(senderIndex).orEmpty()
                 if (!looksTransactionalSender(sender)) continue
                 scanned++
@@ -133,12 +140,10 @@ class SmsScanner @Inject constructor(
         fun looksTransactionalSender(sender: String): Boolean {
             val normalized = sender.uppercase(Locale.ROOT).trim()
             if (normalized.isBlank() || normalized.all(Char::isDigit)) return false
-            return normalized.any(Char::isLetter) &&
-                (
-                    normalized.contains('-') ||
-                        normalized.matches(Regex("[A-Z]{2,}[A-Z0-9]{3,}")) ||
-                        listOf("BANK", "UPI", "PAY", "CARD", "ALERT").any(normalized::contains)
-                    )
+            val dltHeader = normalized.matches(Regex("^[A-Z]{2}-[A-Z0-9]{4,11}$"))
+            val explicitFinancialSender = normalized.matches(Regex("^[A-Z0-9]{5,16}$")) &&
+                listOf("BANK", "UPI", "PAY", "CARD", "ALERT").any(normalized::contains)
+            return dltHeader || explicitFinancialSender
         }
     }
 }

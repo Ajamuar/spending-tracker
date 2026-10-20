@@ -100,7 +100,7 @@ class MainViewModel @Inject constructor(
 ) : ViewModel() {
     private val month = MutableStateFlow(YearMonth.now())
     private val operation = MutableStateFlow(
-        OperationState(smsPermissionGranted = smsScanner.hasPermission()),
+        OperationState(smsPermissionGranted = smsScanner.hasAutomaticPermissions()),
     )
 
     private val baseState = combine(
@@ -137,7 +137,7 @@ class MainViewModel @Inject constructor(
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
-        ExpenseUiState(smsPermissionGranted = smsScanner.hasPermission()),
+        ExpenseUiState(smsPermissionGranted = smsScanner.hasAutomaticPermissions()),
     )
 
     fun completeOnboarding() = preferences.completeOnboarding()
@@ -165,14 +165,19 @@ class MainViewModel @Inject constructor(
         "SMS scan finished: ${summary.imported} new, ${summary.duplicates} matched"
     }
 
-    fun onGmailAuthorized(accessToken: String, accountName: String?) = launchOperation {
-        preferences.setGmailConnection(true, accountName)
-        gmailSyncScheduler.ensureScheduled()
+    fun onGmailAuthorized(accessToken: String) = launchOperation {
         val summary = gmailSyncService.syncWithToken(accessToken)
+        gmailSyncScheduler.ensureScheduled()
         "Gmail sync finished: ${summary.imported} new, ${summary.duplicates} matched"
     }
 
     fun onGmailAuthorizationFailed(message: String) = showMessage(message)
+
+    fun refreshSmsPermission() {
+        operation.value = operation.value.copy(
+            smsPermissionGranted = smsScanner.hasAutomaticPermissions(),
+        )
+    }
 
     fun disconnectGmail() {
         preferences.setGmailConnection(false)

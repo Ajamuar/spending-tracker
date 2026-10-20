@@ -29,7 +29,7 @@ data class TransactionCandidate(
     val accountHint: String?,
     val categoryName: String,
     val occurredAt: Long,
-    val reference: String?,
+    val referenceHash: String?,
     val confidence: Float,
     val contentFingerprint: String,
 )
@@ -50,7 +50,10 @@ class TransactionParser @Inject constructor() {
         val fingerprint = Hashing.sha256(normalizeForFingerprint(combined))
 
         if (combined.isBlank()) return ParseResult.Ignored("Empty message", fingerprint)
-        if (otpCode.containsMatchIn(combined) || otpInstruction.containsMatchIn(combined)) {
+        if (otpCode.containsMatchIn(combined) ||
+            otpInstruction.containsMatchIn(combined) ||
+            authenticationCode.containsMatchIn(combined)
+        ) {
             return ParseResult.Ignored("Authentication or OTP message", fingerprint)
         }
 
@@ -70,18 +73,18 @@ class TransactionParser @Inject constructor() {
             pendingWords.any(lower::contains) -> TransactionStatus.PENDING
             else -> TransactionStatus.POSTED
         }
-        val type = inferType(lower)
+        val type = inferType(lower, amountMatch.range.first)
             ?: return ParseResult.Ignored("No posted transaction action found", fingerprint)
         val accountHint = account.find(combined)?.groupValues?.get(1)
-        val reference = referencePatterns.firstNotNullOfOrNull { pattern ->
+        val referenceHash = referencePatterns.firstNotNullOfOrNull { pattern ->
             pattern.find(combined)?.groupValues?.get(1)?.take(32)
-        }
+        }?.let(Hashing::sha256)
         val merchant = inferMerchant(combined, input.sender, type)
         val category = inferCategory(merchant, lower, type)
         val confidence = (
             0.46f +
                 (if (accountHint != null) 0.12f else 0f) +
-                (if (reference != null) 0.12f else 0f) +
+                (if (referenceHash != null) 0.12f else 0f) +
                 (if (merchant != input.sender) 0.12f else 0f) +
                 (if (status == TransactionStatus.POSTED) 0.08f else 0f)
             ).coerceAtMost(0.92f)
@@ -97,24 +100,40 @@ class TransactionParser @Inject constructor() {
                 accountHint = accountHint,
                 categoryName = category,
                 occurredAt = input.receivedAt,
-                reference = reference,
+                referenceHash = referenceHash,
                 confidence = confidence,
                 contentFingerprint = fingerprint,
             ),
         )
     }
 
-    private fun inferType(text: String): TransactionType? = when {
+    private fun inferType(text: String, amountIndex: Int): TransactionType? = when {
         text.contains("credit card") &&
             listOf("payment received", "payment towards", "card payment").any(text::contains) ->
             TransactionType.CARD_PAYMENT
         listOf("self transfer", "own account", "between your accounts").any(text::contains) ->
             TransactionType.TRANSFER
         refundWords.any(text::contains) -> TransactionType.REFUND
-        creditWords.any(text::contains) -> TransactionType.INCOME
-        debitWords.any(text::contains) -> TransactionType.EXPENSE
-        else -> null
+        else -> {
+            val creditDistance = nearestWordDistance(text, creditWords, amountIndex)
+            val debitDistance = nearestWordDistance(text, debitWords, amountIndex)
+            when {
+                creditDistance == null -> debitDistance?.let { TransactionType.EXPENSE }
+                debitDistance == null -> TransactionType.INCOME
+                creditDistance < debitDistance -> TransactionType.INCOME
+                debitDistance < creditDistance -> TransactionType.EXPENSE
+                else -> null
+            }
+        }
     }
+
+    private fun nearestWordDistance(
+        text: String,
+        words: List<String>,
+        amountIndex: Int,
+    ): Int? = words.flatMap { word ->
+        Regex("\\b${Regex.escape(word)}\\b").findAll(text).map { it.range.first }.toList()
+    }.minOfOrNull { kotlin.math.abs(it - amountIndex) }
 
     private fun inferMerchant(text: String, sender: String, type: TransactionType): String {
         val patterns = when (type) {
@@ -184,7 +203,12 @@ class TransactionParser @Inject constructor() {
             Regex("\\bby\\s+([\\p{L}0-9 .&@_'/-]+?)(?=\\s+(?:on|via|ref|txn|upi|$))", RegexOption.IGNORE_CASE),
         )
         val otpCode = Regex("\\b(?:otp|one[ -]?time password)[\\s:#-]*(?:is\\s*)?[0-9]{4,8}\\b", RegexOption.IGNORE_CASE)
-        val otpInstruction = Regex("\\b(?:use|enter|share)\\s+(?:this\\s+)?otp\\b", RegexOption.IGNORE_CASE)
+        val otpInstruction = Regex("\\b(?:use|enter)\\s+(?:this\\s+)?(?:otp|passcode|pin)\\b", RegexOption.IGNORE_CASE)
+        val authenticationCode = Regex(
+            "(?:\\b(?:otp|one[ -]?time password|passcode|verification code|cvv|pin)\\b.{0,80}\\b[0-9]{4,8}\\b|" +
+                "\\b[0-9]{4,8}\\b.{0,80}\\b(?:otp|one[ -]?time password|passcode|verification code)\\b)",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        )
 
         val failedWords = listOf("failed", "declined", "unsuccessful", "could not be processed")
         val reversedWords = listOf("reversed", "reversal", "has been reversed")
@@ -199,7 +223,6 @@ class TransactionParser @Inject constructor() {
             "purchase",
             "withdrawn",
             "sent",
-            "transaction of",
         )
         val categoryRules = listOf(
             "Food & dining" to listOf("swiggy", "zomato", "restaurant", "cafe", "food"),

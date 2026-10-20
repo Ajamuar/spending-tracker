@@ -626,7 +626,12 @@ private fun SettingsScreen(
                 }
             }
         }
-        item { SectionTitle("Your data", "Portable files that stay under your control") }
+        item {
+            SectionTitle(
+                "Your data",
+                "CSV is plaintext; use an encrypted backup for private storage.",
+            )
+        }
         item {
             ActionGridRow(
                 first = Triple(Icons.Outlined.FileDownload, "Export CSV", onExportCsv),
@@ -1048,6 +1053,7 @@ private fun EditTransactionDialog(
     var categoryId by rememberSaveable(transaction.id) { mutableStateOf(transaction.categoryId) }
     var excluded by rememberSaveable(transaction.id) { mutableStateOf(transaction.isExcluded) }
     var status by rememberSaveable(transaction.id) { mutableStateOf(transaction.status) }
+    var confirmDelete by rememberSaveable(transaction.id) { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Review transaction") },
@@ -1116,10 +1122,10 @@ private fun EditTransactionDialog(
                     OutlinedTextField(note, { note = it }, label = { Text("Note") })
                 }
                 item {
-                    TextButton(onClick = onDelete) {
+                    TextButton(onClick = { confirmDelete = true }) {
                         Icon(Icons.Outlined.Delete, null)
                         Spacer(Modifier.width(6.dp))
-                        Text("Delete transaction")
+                        Text("Delete permanently")
                     }
                 }
             }
@@ -1131,6 +1137,24 @@ private fun EditTransactionDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete this transaction?") },
+            text = {
+                Text(
+                    "This transaction will stay tombstoned and will not be imported again " +
+                        "from the same SMS or email.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = onDelete) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("Keep") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -1169,9 +1193,14 @@ private fun PassphraseDialog(
     onDismiss: () -> Unit,
     onConfirm: (CharArray) -> Unit,
 ) {
-    var passphrase by rememberSaveable { mutableStateOf("") }
+    var passphrase by remember { mutableStateOf("") }
+    var confirmation by remember { mutableStateOf("") }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            passphrase = ""
+            confirmation = ""
+            onDismiss()
+        },
         title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1183,6 +1212,16 @@ private fun PassphraseDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                 )
+                if (confirmLabel == "Create backup") {
+                    OutlinedTextField(
+                        value = confirmation,
+                        onValueChange = { confirmation = it },
+                        label = { Text("Confirm passphrase") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                    )
+                }
                 Text(
                     "Use at least 8 characters. This passphrase cannot be recovered.",
                     style = MaterialTheme.typography.bodySmall,
@@ -1192,11 +1231,25 @@ private fun PassphraseDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(passphrase.toCharArray()) },
-                enabled = passphrase.length >= 8,
+                onClick = {
+                    val characters = passphrase.toCharArray()
+                    passphrase = ""
+                    confirmation = ""
+                    onConfirm(characters)
+                },
+                enabled = passphrase.length >= 8 &&
+                    (confirmLabel != "Create backup" || passphrase == confirmation),
             ) { Text(confirmLabel) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    passphrase = ""
+                    confirmation = ""
+                    onDismiss()
+                },
+            ) { Text("Cancel") }
+        },
     )
 }
 

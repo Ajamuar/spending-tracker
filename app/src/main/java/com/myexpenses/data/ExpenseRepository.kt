@@ -34,6 +34,22 @@ data class ImportResult(
     val detail: String,
 )
 
+data class CsvTransactionInput(
+    val id: String,
+    val amountMinor: Long,
+    val type: TransactionType,
+    val status: TransactionStatus,
+    val merchant: String,
+    val categoryName: String?,
+    val accountName: String?,
+    val accountType: AccountType?,
+    val accountLastFour: String?,
+    val occurredAt: Long,
+    val note: String,
+    val isExcluded: Boolean,
+    val referenceHash: String?,
+)
+
 @Singleton
 class ExpenseRepository @Inject constructor(
     private val database: AppDatabase,
@@ -74,17 +90,29 @@ class ExpenseRepository @Inject constructor(
         }
 
         val duplicateWindow = 10 * 60 * 1000L
-        val duplicate = transactionDao.findPotentialDuplicate(
+        val duplicate = transactionDao.findPotentialDuplicates(
             amountMinor = candidate.amountMinor,
             type = candidate.type,
             from = candidate.occurredAt - duplicateWindow,
             to = candidate.occurredAt + duplicateWindow,
             target = candidate.occurredAt,
-        )?.takeIf {
-            accountHintsMatch(it.accountHint, candidate.accountHint) &&
-                merchantsMatch(it.merchant, candidate.merchant)
-        }
+        ).firstOrNull { isStrongCrossSourceDuplicate(it, candidate) }
         if (duplicate != null) {
+            if (duplicate.status != TransactionStatus.POSTED &&
+                candidate.status == TransactionStatus.POSTED
+            ) {
+                transactionDao.update(
+                    duplicate.copy(
+                        status = TransactionStatus.POSTED,
+                        isExcluded = false,
+                        sourceConfidence = maxOf(
+                            duplicate.sourceConfidence,
+                            candidate.confidence,
+                        ),
+                        updatedAt = System.currentTimeMillis(),
+                    ),
+                )
+            }
             ingestionDao.insert(
                 candidate.toRecord(
                     externalHash = externalHash,
@@ -103,11 +131,15 @@ class ExpenseRepository @Inject constructor(
         val category = categoryDao.getByName(candidate.categoryName)
             ?: categoryDao.getByName("Other")
         val account = candidate.accountHint?.let { hint ->
-            accountDao.find(AccountType.BANK, hint) ?: AccountEntity(
-                name = "Account •$hint",
-                type = AccountType.BANK,
-                lastFour = hint,
-            ).also(accountDao::upsert)
+            accountDao.find(AccountType.BANK, hint) ?: run {
+                val newAccount = AccountEntity(
+                    name = "Account •$hint",
+                    type = AccountType.BANK,
+                    lastFour = hint,
+                )
+                accountDao.upsert(newAccount)
+                newAccount
+            }
         }
         val transaction = TransactionEntity(
             amountMinor = candidate.amountMinor,
@@ -120,7 +152,7 @@ class ExpenseRepository @Inject constructor(
             occurredAt = candidate.occurredAt,
             source = candidate.source,
             sourceConfidence = candidate.confidence,
-            reference = candidate.reference,
+            referenceHash = candidate.referenceHash,
             isExcluded = candidate.status != TransactionStatus.POSTED,
         )
         database.withTransaction {
@@ -155,6 +187,9 @@ class ExpenseRepository @Inject constructor(
             ),
         )
     }
+
+    suspend fun isProcessed(source: SourceType, externalId: String): Boolean =
+        ingestionDao.exists(source, Hashing.sha256(externalId))
 
     suspend fun addManual(
         amountMinor: Long,
@@ -225,12 +260,54 @@ class ExpenseRepository @Inject constructor(
         budgets = budgetDao.getAll(),
     )
 
-    suspend fun importCsv(transactions: List<TransactionEntity>) {
-        transactions.forEach { transactionDao.insert(it.copy(source = SourceType.CSV)) }
+    suspend fun importCsv(rows: List<CsvTransactionInput>): Int {
+        var inserted = 0
+        database.withTransaction {
+            rows.forEach { row ->
+                val category = row.categoryName?.takeIf(String::isNotBlank)?.let { name ->
+                    categoryDao.getByName(name) ?: CategoryEntity(
+                        name = name,
+                        icon = "•",
+                        color = 0xFF7D8597,
+                    ).also { categoryDao.insertAll(listOf(it)) }
+                }
+                val account = row.accountName?.takeIf(String::isNotBlank)?.let { name ->
+                    accountDao.getByName(name) ?: AccountEntity(
+                        name = name,
+                        type = row.accountType ?: AccountType.OTHER,
+                        lastFour = row.accountLastFour,
+                    ).also { accountDao.upsert(it) }
+                }
+                val result = transactionDao.insert(
+                    TransactionEntity(
+                        id = row.id,
+                        amountMinor = row.amountMinor,
+                        type = row.type,
+                        status = row.status,
+                        merchant = row.merchant,
+                        categoryId = category?.id,
+                        accountId = account?.id,
+                        accountHint = row.accountLastFour,
+                        occurredAt = row.occurredAt,
+                        source = SourceType.CSV,
+                        note = row.note,
+                        isExcluded = row.isExcluded,
+                        referenceHash = row.referenceHash,
+                    ),
+                )
+                if (result != -1L) inserted++
+            }
+        }
+        return inserted
     }
 
     suspend fun restore(snapshot: LedgerSnapshot) {
         database.withTransaction {
+            ingestionDao.deleteAll()
+            budgetDao.deleteAll()
+            transactionDao.deleteAll()
+            accountDao.deleteAll()
+            categoryDao.deleteAll()
             categoryDao.upsertAll(snapshot.categories)
             accountDao.upsertAll(snapshot.accounts)
             transactionDao.upsertAll(snapshot.transactions)
@@ -238,13 +315,20 @@ class ExpenseRepository @Inject constructor(
         }
     }
 
-    private fun accountHintsMatch(first: String?, second: String?): Boolean =
-        first == null || second == null || first == second
-
-    private fun merchantsMatch(first: String, second: String): Boolean {
-        val left = first.lowercase().filter(Char::isLetterOrDigit)
-        val right = second.lowercase().filter(Char::isLetterOrDigit)
-        return left == right || left.contains(right) || right.contains(left)
+    private fun isStrongCrossSourceDuplicate(
+        existing: TransactionEntity,
+        candidate: TransactionCandidate,
+    ): Boolean {
+        if (existing.source == candidate.source) return false
+        if (existing.referenceHash != null && candidate.referenceHash != null) {
+            return existing.referenceHash == candidate.referenceHash
+        }
+        val accountMatches = existing.accountHint != null &&
+            candidate.accountHint != null &&
+            existing.accountHint == candidate.accountHint
+        val leftMerchant = existing.merchant.lowercase().filter(Char::isLetterOrDigit)
+        val rightMerchant = candidate.merchant.lowercase().filter(Char::isLetterOrDigit)
+        return accountMatches && leftMerchant.length >= 3 && leftMerchant == rightMerchant
     }
 
     private fun TransactionCandidate.toRecord(

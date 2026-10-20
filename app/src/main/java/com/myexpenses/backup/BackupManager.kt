@@ -1,6 +1,7 @@
 package com.myexpenses.backup
 
 import com.myexpenses.data.ExpenseRepository
+import com.myexpenses.data.CsvTransactionInput
 import com.myexpenses.data.model.AccountEntity
 import com.myexpenses.data.model.AccountType
 import com.myexpenses.data.model.BudgetEntity
@@ -98,9 +99,12 @@ class BackupManager @Inject constructor(
 
     suspend fun exportCsv(output: OutputStream) = withContext(Dispatchers.IO) {
         val snapshot = repository.snapshot()
+        val categories = snapshot.categories.associateBy(CategoryEntity::id)
+        val accounts = snapshot.accounts.associateBy(AccountEntity::id)
         output.bufferedWriter().use { writer ->
             writer.appendLine(CSV_HEADER.joinToString(","))
             snapshot.transactions.forEach { transaction ->
+                val account = accounts[transaction.accountId]
                 writer.appendLine(
                     listOf(
                         transaction.id,
@@ -109,12 +113,14 @@ class BackupManager @Inject constructor(
                         transaction.type.name,
                         transaction.status.name,
                         transaction.merchant,
-                        transaction.categoryId.orEmpty(),
-                        transaction.accountId.orEmpty(),
+                        categories[transaction.categoryId]?.name.orEmpty(),
+                        account?.name.orEmpty(),
+                        account?.type?.name.orEmpty(),
+                        account?.lastFour.orEmpty(),
                         transaction.source.name,
                         transaction.note,
                         transaction.isExcluded.toString(),
-                        transaction.reference.orEmpty(),
+                        transaction.referenceHash.orEmpty(),
                     ).map(::escapeCsv).joinToString(","),
                 )
             }
@@ -130,7 +136,7 @@ class BackupManager @Inject constructor(
         require("amount_inr" in indexes && "merchant" in indexes) {
             "CSV must contain amount_inr and merchant columns"
         }
-        val entities = rows.drop(1).mapNotNull { row ->
+        val parsedRows = rows.drop(1).mapNotNull { row ->
             fun value(name: String): String = indexes[name]?.let { row.getOrNull(it) }.orEmpty()
             val amountMinor = value("amount_inr").toBigDecimalOrNull()
                 ?.movePointRight(2)
@@ -140,24 +146,25 @@ class BackupManager @Inject constructor(
                 ?: return@mapNotNull null
             val type = enumOrDefault(value("type"), TransactionType.EXPENSE)
             val status = enumOrDefault(value("status"), TransactionStatus.POSTED)
-            TransactionEntity(
+            CsvTransactionInput(
                 id = value("id").ifBlank { UUID.randomUUID().toString() },
                 amountMinor = amountMinor,
                 type = type,
                 status = status,
                 merchant = value("merchant").ifBlank { "CSV transaction" },
-                categoryId = value("category_id").ifBlank { null },
-                accountId = value("account_id").ifBlank { null },
+                categoryName = value("category_name").ifBlank { null },
+                accountName = value("account_name").ifBlank { null },
+                accountType = value("account_type").takeIf(String::isNotBlank)
+                    ?.let { enumOrDefault(it, AccountType.OTHER) },
+                accountLastFour = value("account_last_four").ifBlank { null },
                 occurredAt = runCatching { Instant.parse(value("timestamp")).toEpochMilli() }
                     .getOrDefault(System.currentTimeMillis()),
-                source = SourceType.CSV,
                 note = value("note"),
                 isExcluded = value("excluded").toBooleanStrictOrNull() ?: false,
-                reference = value("reference").ifBlank { null },
+                referenceHash = value("reference_hash").ifBlank { null },
             )
         }
-        repository.importCsv(entities)
-        entities.size
+        repository.importCsv(parsedRows)
     }
 
     private fun LedgerSnapshot.toBackup() = BackupEnvelope(
@@ -236,12 +243,14 @@ class BackupManager @Inject constructor(
         return rows
     }
 
-    private fun escapeCsv(value: String): String =
-        if (value.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
-            "\"${value.replace("\"", "\"\"")}\""
+    private fun escapeCsv(value: String): String {
+        val safe = if (value.firstOrNull() in setOf('=', '+', '-', '@')) "'$value" else value
+        return if (safe.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
+            "\"${safe.replace("\"", "\"\"")}\""
         } else {
-            value
+            safe
         }
+    }
 
     private companion object {
         const val BACKUP_VERSION = 1
@@ -261,12 +270,14 @@ class BackupManager @Inject constructor(
             "type",
             "status",
             "merchant",
-            "category_id",
-            "account_id",
+            "category_name",
+            "account_name",
+            "account_type",
+            "account_last_four",
             "source",
             "note",
             "excluded",
-            "reference",
+            "reference_hash",
         )
     }
 }
@@ -294,7 +305,7 @@ private data class TransactionBackup(
     val occurredAt: Long,
     val source: String,
     val sourceConfidence: Float,
-    val reference: String?,
+    val referenceHash: String?,
     val note: String,
     val isExcluded: Boolean,
     val createdAt: Long,
@@ -332,13 +343,13 @@ private data class BudgetBackup(
 
 private fun TransactionEntity.toBackup() = TransactionBackup(
     id, amountMinor, type.name, status.name, merchant, accountId, accountHint, categoryId,
-    occurredAt, source.name, sourceConfidence, reference, note, isExcluded, createdAt, updatedAt,
+    occurredAt, source.name, sourceConfidence, referenceHash, note, isExcluded, createdAt, updatedAt,
 )
 
 private fun TransactionBackup.toEntity() = TransactionEntity(
     id, amountMinor, enumOrDefault(type, TransactionType.EXPENSE),
     enumOrDefault(status, TransactionStatus.POSTED), merchant, accountId, accountHint, categoryId,
-    occurredAt, enumOrDefault(source, SourceType.BACKUP), sourceConfidence, reference, note,
+    occurredAt, enumOrDefault(source, SourceType.BACKUP), sourceConfidence, referenceHash, note,
     isExcluded, createdAt, updatedAt,
 )
 

@@ -106,7 +106,7 @@ data class TransactionEntity(
     val occurredAt: Long,
     val source: SourceType,
     val sourceConfidence: Float = 1f,
-    val reference: String? = null,
+    val referenceHash: String? = null,
     val note: String = "",
     val isExcluded: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),

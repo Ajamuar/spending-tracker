@@ -9,6 +9,7 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.room.Update
+import androidx.room.Upsert
 import com.myexpenses.data.model.AccountEntity
 import com.myexpenses.data.model.AccountType
 import com.myexpenses.data.model.BudgetEntity
@@ -53,21 +54,21 @@ interface TransactionDao {
           AND occurredAt BETWEEN :from AND :to
           AND status != 'FAILED'
         ORDER BY ABS(occurredAt - :target)
-        LIMIT 1
+        LIMIT 20
         """,
     )
-    suspend fun findPotentialDuplicate(
+    suspend fun findPotentialDuplicates(
         amountMinor: Long,
         type: TransactionType,
         from: Long,
         to: Long,
         target: Long,
-    ): TransactionEntity?
+    ): List<TransactionEntity>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(entity: TransactionEntity): Long
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsertAll(entities: List<TransactionEntity>)
 
     @Update
@@ -75,6 +76,9 @@ interface TransactionDao {
 
     @Query("DELETE FROM transactions WHERE id = :id")
     suspend fun delete(id: String)
+
+    @Query("DELETE FROM transactions")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -94,8 +98,11 @@ interface CategoryDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAll(entities: List<CategoryEntity>)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsertAll(entities: List<CategoryEntity>)
+
+    @Query("DELETE FROM categories")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -105,6 +112,9 @@ interface AccountDao {
 
     @Query("SELECT * FROM accounts ORDER BY name")
     suspend fun getAll(): List<AccountEntity>
+
+    @Query("SELECT * FROM accounts WHERE name = :name COLLATE NOCASE LIMIT 1")
+    suspend fun getByName(name: String): AccountEntity?
 
     @Query(
         """
@@ -116,11 +126,14 @@ interface AccountDao {
     )
     suspend fun find(type: AccountType, lastFour: String?): AccountEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsert(entity: AccountEntity)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsertAll(entities: List<AccountEntity>)
+
+    @Query("DELETE FROM accounts")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -131,14 +144,17 @@ interface BudgetDao {
     @Query("SELECT * FROM budgets ORDER BY monthKey DESC")
     suspend fun getAll(): List<BudgetEntity>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsert(entity: BudgetEntity)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsertAll(entities: List<BudgetEntity>)
 
     @Query("DELETE FROM budgets WHERE categoryId = :categoryId AND monthKey = :monthKey")
     suspend fun delete(categoryId: String, monthKey: String)
+
+    @Query("DELETE FROM budgets")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -154,6 +170,9 @@ interface IngestionDao {
 
     @Query("SELECT COUNT(*) FROM ingestion_records WHERE outcome = 'IMPORTED'")
     fun observeImportedCount(): Flow<Int>
+
+    @Query("DELETE FROM ingestion_records")
+    suspend fun deleteAll()
 }
 
 @Database(
