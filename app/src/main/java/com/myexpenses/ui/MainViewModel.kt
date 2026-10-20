@@ -22,6 +22,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
@@ -89,6 +90,7 @@ private data class OperationState(
 )
 
 @HiltViewModel
+@OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: ExpenseRepository,

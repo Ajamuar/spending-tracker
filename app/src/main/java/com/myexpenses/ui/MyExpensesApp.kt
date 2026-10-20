@@ -23,10 +23,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Email
@@ -36,7 +37,6 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.LinkOff
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
@@ -103,7 +103,7 @@ import java.util.Locale
 
 private enum class AppScreen(val label: String, val icon: ImageVector) {
     DASHBOARD("Overview", Icons.Outlined.Home),
-    TRANSACTIONS("Activity", Icons.Outlined.ReceiptLong),
+    TRANSACTIONS("Activity", Icons.AutoMirrored.Outlined.ReceiptLong),
     BUDGETS("Budgets", Icons.Outlined.AccountBalanceWallet),
     SETTINGS("Settings", Icons.Outlined.Settings),
 }
@@ -415,7 +415,7 @@ private fun DashboardScreen(
                         AssistChip(
                             onClick = {},
                             label = { Text("${state.monthTransactions.size} transactions") },
-                            leadingIcon = { Icon(Icons.Outlined.ReceiptLong, null) },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Outlined.ReceiptLong, null) },
                         )
                         AssistChip(
                             onClick = {},
@@ -709,7 +709,7 @@ private fun MonthSelector(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onPrevious) {
-            Icon(Icons.Outlined.ArrowBack, contentDescription = "Previous month")
+            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Previous month")
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
@@ -722,7 +722,7 @@ private fun MonthSelector(
             )
         }
         IconButton(onClick = onNext, enabled = month < YearMonth.now()) {
-            Icon(Icons.Outlined.ArrowForward, contentDescription = "Next month")
+            Icon(Icons.AutoMirrored.Outlined.ArrowForward, contentDescription = "Next month")
         }
     }
 }
@@ -1276,8 +1276,13 @@ private fun spentForCategory(state: ExpenseUiState, categoryId: String): Long =
             (it.type == TransactionType.EXPENSE || it.type == TransactionType.CARD_PAYMENT)
     }.sumOf(TransactionEntity::amountMinor)
 
+private val IndianLocale: Locale = Locale.Builder()
+    .setLanguage("en")
+    .setRegion("IN")
+    .build()
+
 private fun formatMoney(amountMinor: Long): String =
-    NumberFormat.getCurrencyInstance(Locale("en", "IN")).format(amountMinor / 100.0)
+    NumberFormat.getCurrencyInstance(IndianLocale).format(amountMinor / 100.0)
 
 private fun formatDate(epochMillis: Long): String =
     Instant.ofEpochMilli(epochMillis)
