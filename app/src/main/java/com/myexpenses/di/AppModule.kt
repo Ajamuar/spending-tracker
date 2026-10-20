@@ -60,8 +60,8 @@ object AppModule {
         database.parserRuleDao()
 
     private val MIGRATION_1_2 = object : Migration(1, 2) {
-        override fun migrate(database: SupportSQLiteDatabase) {
-            database.execSQL(
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
                 """
                 CREATE TABLE IF NOT EXISTS `parser_rules` (
                     `id` TEXT NOT NULL,
@@ -77,7 +77,7 @@ object AppModule {
                 )
                 """.trimIndent(),
             )
-            database.execSQL(
+            db.execSQL(
                 "CREATE INDEX IF NOT EXISTS `index_parser_rules_priority` " +
                     "ON `parser_rules` (`priority`)",
             )
