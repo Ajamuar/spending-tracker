@@ -17,25 +17,18 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
-import java.io.DataOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.math.RoundingMode
-import java.security.SecureRandom
 import java.time.Instant
 import java.util.UUID
-import javax.crypto.Cipher
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.PBEKeySpec
-import javax.crypto.spec.SecretKeySpec
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class BackupManager @Inject constructor(
     private val repository: ExpenseRepository,
+    private val cipher: BackupCipher,
 ) {
     private val json = Json {
         encodeDefaults = true
@@ -44,51 +37,15 @@ class BackupManager @Inject constructor(
 
     suspend fun exportEncrypted(output: OutputStream, passphrase: CharArray) =
         withContext(Dispatchers.IO) {
-            require(passphrase.size >= MIN_PASSPHRASE_LENGTH) {
-                "Backup passphrase must contain at least $MIN_PASSPHRASE_LENGTH characters"
-            }
             val plaintext = json.encodeToString(repository.snapshot().toBackup())
                 .toByteArray(Charsets.UTF_8)
-            val salt = ByteArray(SALT_SIZE).also(SecureRandom()::nextBytes)
-            val iv = ByteArray(IV_SIZE).also(SecureRandom()::nextBytes)
-            val key = deriveKey(passphrase, salt)
-            val ciphertext = Cipher.getInstance(CIPHER).run {
-                init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
-                updateAAD(MAGIC)
-                doFinal(plaintext)
-            }
-            DataOutputStream(output).use {
-                it.write(MAGIC)
-                it.write(salt)
-                it.write(iv)
-                it.write(ciphertext)
-            }
+            cipher.encrypt(plaintext, output, passphrase)
             plaintext.fill(0)
         }
 
     suspend fun restoreEncrypted(input: InputStream, passphrase: CharArray) =
         withContext(Dispatchers.IO) {
-            require(passphrase.size >= MIN_PASSPHRASE_LENGTH) {
-                "Backup passphrase must contain at least $MIN_PASSPHRASE_LENGTH characters"
-            }
-            val data = readLimited(input)
-            require(data.size > MAGIC.size + SALT_SIZE + IV_SIZE) { "Backup is empty or truncated" }
-            val stream = DataInputStream(data.inputStream())
-            val magic = ByteArray(MAGIC.size).also(stream::readFully)
-            require(magic.contentEquals(MAGIC)) { "Not a My Expenses encrypted backup" }
-            val salt = ByteArray(SALT_SIZE).also(stream::readFully)
-            val iv = ByteArray(IV_SIZE).also(stream::readFully)
-            val ciphertext = stream.readBytes()
-            val key = deriveKey(passphrase, salt)
-            val plaintext = try {
-                Cipher.getInstance(CIPHER).run {
-                    init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
-                    updateAAD(MAGIC)
-                    doFinal(ciphertext)
-                }
-            } catch (error: Exception) {
-                throw IllegalArgumentException("Wrong passphrase or damaged backup", error)
-            }
+            val plaintext = cipher.decrypt(input, passphrase)
             val envelope = json.decodeFromString<BackupEnvelope>(plaintext.toString(Charsets.UTF_8))
             require(envelope.version == BACKUP_VERSION) {
                 "Unsupported backup version ${envelope.version}"
@@ -183,18 +140,6 @@ class BackupManager @Inject constructor(
         budgets = budgets.map(BudgetBackup::toEntity),
     )
 
-    private fun deriveKey(passphrase: CharArray, salt: ByteArray): SecretKeySpec {
-        val specification = PBEKeySpec(passphrase, salt, PBKDF2_ITERATIONS, KEY_BITS)
-        return try {
-            val encoded = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-                .generateSecret(specification)
-                .encoded
-            SecretKeySpec(encoded, "AES")
-        } finally {
-            specification.clearPassword()
-        }
-    }
-
     private fun readLimited(input: InputStream): ByteArray {
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -254,15 +199,7 @@ class BackupManager @Inject constructor(
 
     private companion object {
         const val BACKUP_VERSION = 1
-        const val MIN_PASSPHRASE_LENGTH = 8
-        const val SALT_SIZE = 16
-        const val IV_SIZE = 12
-        const val TAG_BITS = 128
-        const val KEY_BITS = 256
-        const val PBKDF2_ITERATIONS = 310_000
         const val MAX_FILE_BYTES = 25 * 1024 * 1024
-        const val CIPHER = "AES/GCM/NoPadding"
-        val MAGIC = "MYEXP001".toByteArray(Charsets.US_ASCII)
         val CSV_HEADER = listOf(
             "id",
             "timestamp",

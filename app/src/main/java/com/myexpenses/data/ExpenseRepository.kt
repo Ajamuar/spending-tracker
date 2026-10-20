@@ -319,10 +319,10 @@ class ExpenseRepository @Inject constructor(
         existing: TransactionEntity,
         candidate: TransactionCandidate,
     ): Boolean {
-        if (existing.source == candidate.source) return false
         if (existing.referenceHash != null && candidate.referenceHash != null) {
             return existing.referenceHash == candidate.referenceHash
         }
+        if (existing.source == candidate.source) return false
         val accountMatches = existing.accountHint != null &&
             candidate.accountHint != null &&
             existing.accountHint == candidate.accountHint
