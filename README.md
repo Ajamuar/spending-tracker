@@ -44,6 +44,12 @@ repository.
 - An Android 8.0+ device; Android 13+ is recommended
 - Google Play services for Gmail authorization
 
+## Download the APK
+
+Download the private debug build from
+[`releases/my-expenses-1.0.0-debug.apk`](releases/my-expenses-1.0.0-debug.apk).
+Android may ask you to allow installation from your browser or file manager before sideloading it.
+
 ## Build and run
 
 1. Install Android SDK 37 and accept the Android SDK licenses.
