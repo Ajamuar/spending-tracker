@@ -1,13 +1,11 @@
 package com.myexpenses.ui
 
 import androidx.activity.ComponentActivity
-import androidx.compose.ui.test.assertAny
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -100,7 +98,7 @@ class MyExpensesAppTest {
         composeRule.onNodeWithText("Budget alerts").performScrollTo().assertIsDisplayed()
         composeRule.onNode(hasScrollAction()).performScrollToNode(hasText("Top merchants"))
         composeRule.onNodeWithText("Top merchants").assertIsDisplayed()
-        composeRule.onAllNodesWithText("TEST CAFE").assertAny(isDisplayed())
+        composeRule.onNode(hasText("TEST CAFE") and hasClickAction().not()).assertIsDisplayed()
     }
 
     @Test
