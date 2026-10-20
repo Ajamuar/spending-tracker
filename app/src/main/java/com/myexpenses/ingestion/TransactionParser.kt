@@ -118,6 +118,9 @@ class TransactionParser @Inject constructor() {
             val creditDistance = nearestWordDistance(text, creditWords, amountIndex)
             val debitDistance = nearestWordDistance(text, debitWords, amountIndex)
             when {
+                creditDistance == null && debitDistance == null &&
+                    reversedWords.any(text::contains) &&
+                    (" at " in text || "card" in text) -> TransactionType.EXPENSE
                 creditDistance == null -> debitDistance?.let { TransactionType.EXPENSE }
                 debitDistance == null -> TransactionType.INCOME
                 creditDistance < debitDistance -> TransactionType.INCOME
