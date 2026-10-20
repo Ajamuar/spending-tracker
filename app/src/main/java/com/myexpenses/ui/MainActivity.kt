@@ -111,10 +111,12 @@ class MainActivity : ComponentActivity() {
                     onPreviousMonth = viewModel::previousMonth,
                     onNextMonth = viewModel::nextMonth,
                     onSearch = viewModel::setSearchQuery,
+                    onReviewOnly = viewModel::setReviewOnly,
                     onAddManual = viewModel::addManual,
                     onUpdateTransaction = viewModel::updateTransaction,
                     onDeleteTransaction = viewModel::deleteTransaction,
                     onSetBudget = viewModel::setBudget,
+                    onSaveAccount = viewModel::saveAccount,
                     onExportCsv = {
                         exportCsvLauncher.launch("my-expenses-${java.time.LocalDate.now()}.csv")
                     },

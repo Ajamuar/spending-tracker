@@ -12,6 +12,7 @@ import com.myexpenses.data.model.AccountEntity
 import com.myexpenses.data.model.BudgetEntity
 import com.myexpenses.data.model.CategoryEntity
 import com.myexpenses.data.model.IngestionRecordEntity
+import com.myexpenses.data.model.SourceType
 import com.myexpenses.data.model.TransactionEntity
 import com.myexpenses.data.model.TransactionStatus
 import com.myexpenses.data.model.TransactionType
@@ -42,6 +43,7 @@ data class ExpenseUiState(
     val settings: IngestionSettings = IngestionSettings(),
     val month: YearMonth = YearMonth.now(),
     val searchQuery: String = "",
+    val reviewOnly: Boolean = false,
     val smsPermissionGranted: Boolean = false,
     val busy: Boolean = false,
     val message: String? = null,
@@ -55,12 +57,21 @@ data class ExpenseUiState(
         get() {
             val query = searchQuery.trim()
             return monthTransactions.filter {
-                query.isBlank() ||
-                    it.merchant.contains(query, ignoreCase = true) ||
-                    it.note.contains(query, ignoreCase = true) ||
-                    it.accountHint.orEmpty().contains(query, ignoreCase = true)
+                (!reviewOnly || it.needsReview()) &&
+                    (
+                        query.isBlank() ||
+                            it.merchant.contains(query, ignoreCase = true) ||
+                            it.note.contains(query, ignoreCase = true) ||
+                            it.accountHint.orEmpty().contains(query, ignoreCase = true)
+                        )
             }
         }
+
+    val needsReviewCount: Int
+        get() = monthTransactions.count(TransactionEntity::needsReview)
+
+    val activeAccounts: List<AccountEntity>
+        get() = accounts.filterNot(AccountEntity::isArchived)
 
     val spendingMinor: Long
         get() = monthTransactions.filter {
@@ -84,6 +95,7 @@ private data class BaseLedgerState(
 
 private data class OperationState(
     val searchQuery: String = "",
+    val reviewOnly: Boolean = false,
     val smsPermissionGranted: Boolean = false,
     val busy: Boolean = false,
     val message: String? = null,
@@ -132,6 +144,7 @@ class MainViewModel @Inject constructor(
             settings = base.settings,
             month = selectedMonth,
             searchQuery = op.searchQuery,
+            reviewOnly = op.reviewOnly,
             smsPermissionGranted = op.smsPermissionGranted,
             busy = op.busy,
             message = op.message,
@@ -154,6 +167,10 @@ class MainViewModel @Inject constructor(
 
     fun setSearchQuery(query: String) {
         operation.value = operation.value.copy(searchQuery = query)
+    }
+
+    fun setReviewOnly(reviewOnly: Boolean) {
+        operation.value = operation.value.copy(reviewOnly = reviewOnly)
     }
 
     fun onSmsPermissionResult(granted: Boolean) {
@@ -241,6 +258,17 @@ class MainViewModel @Inject constructor(
         "Transaction deleted"
     }
 
+    fun saveAccount(
+        id: String?,
+        name: String,
+        type: com.myexpenses.data.model.AccountType,
+        lastFour: String?,
+        archived: Boolean,
+    ) = launchOperation {
+        repository.saveAccount(id, name, type, lastFour, archived)
+        "Account saved"
+    }
+
     fun setBudget(categoryId: String, amount: String) = launchOperation {
         val amountMinor = amount.toBigDecimalOrNull()
             ?.movePointRight(2)
@@ -308,3 +336,7 @@ class MainViewModel @Inject constructor(
         operation.value = operation.value.copy(message = message)
     }
 }
+
+private fun TransactionEntity.needsReview(): Boolean =
+    (source == SourceType.SMS || source == SourceType.EMAIL) &&
+        (sourceConfidence < 0.8f || status != TransactionStatus.POSTED)

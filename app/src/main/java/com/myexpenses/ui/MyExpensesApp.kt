@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
+import androidx.compose.material.icons.outlined.AccountBalance
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Sms
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -87,6 +89,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.myexpenses.data.model.BudgetEntity
+import com.myexpenses.data.model.AccountEntity
+import com.myexpenses.data.model.AccountType
 import com.myexpenses.data.model.CategoryEntity
 import com.myexpenses.data.model.IngestionOutcome
 import com.myexpenses.data.model.SourceType
@@ -105,6 +109,7 @@ private enum class AppScreen(val label: String, val icon: ImageVector) {
     DASHBOARD("Overview", Icons.Outlined.Home),
     TRANSACTIONS("Activity", Icons.AutoMirrored.Outlined.ReceiptLong),
     BUDGETS("Budgets", Icons.Outlined.AccountBalanceWallet),
+    ACCOUNTS("Accounts", Icons.Outlined.AccountBalance),
     SETTINGS("Settings", Icons.Outlined.Settings),
 }
 
@@ -126,10 +131,12 @@ fun MyExpensesApp(
     onPreviousMonth: () -> Unit,
     onNextMonth: () -> Unit,
     onSearch: (String) -> Unit,
+    onReviewOnly: (Boolean) -> Unit,
     onAddManual: (String, TransactionType, String, String?, String?, String) -> Unit,
     onUpdateTransaction: (TransactionEntity, String, String?, String, Boolean, TransactionStatus) -> Unit,
     onDeleteTransaction: (String) -> Unit,
     onSetBudget: (String, String) -> Unit,
+    onSaveAccount: (String?, String, AccountType, String?, Boolean) -> Unit,
     onExportCsv: () -> Unit,
     onImportCsv: () -> Unit,
     onExportBackup: (CharArray) -> Unit,
@@ -141,6 +148,8 @@ fun MyExpensesApp(
     var showManualEntry by rememberSaveable { mutableStateOf(false) }
     var editingTransactionId by rememberSaveable { mutableStateOf<String?>(null) }
     var editingBudgetCategoryId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editingAccountId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showAccountDialog by rememberSaveable { mutableStateOf(false) }
     var backupAction by rememberSaveable { mutableStateOf<BackupAction?>(null) }
 
     LaunchedEffect(state.message) {
@@ -220,6 +229,7 @@ fun MyExpensesApp(
                         onPreviousMonth = onPreviousMonth,
                         onNextMonth = onNextMonth,
                         onSearch = onSearch,
+                        onReviewOnly = onReviewOnly,
                         onTransactionClick = { editingTransactionId = it.id },
                     )
                     AppScreen.BUDGETS -> BudgetsScreen(
@@ -227,6 +237,17 @@ fun MyExpensesApp(
                         onPreviousMonth = onPreviousMonth,
                         onNextMonth = onNextMonth,
                         onBudgetClick = { editingBudgetCategoryId = it.id },
+                    )
+                    AppScreen.ACCOUNTS -> AccountsScreen(
+                        state = state,
+                        onAddAccount = {
+                            editingAccountId = null
+                            showAccountDialog = true
+                        },
+                        onAccountClick = {
+                            editingAccountId = it.id
+                            showAccountDialog = true
+                        },
                     )
                     AppScreen.SETTINGS -> SettingsScreen(
                         state = state,
@@ -260,7 +281,7 @@ fun MyExpensesApp(
     if (showManualEntry) {
         ManualTransactionDialog(
             categories = state.categories,
-            accounts = state.accounts.map { it.id to it.name },
+            accounts = state.activeAccounts.map { it.id to it.name },
             onDismiss = { showManualEntry = false },
             onSave = { amount, type, merchant, categoryId, accountId, note ->
                 onAddManual(amount, type, merchant, categoryId, accountId, note)
@@ -308,6 +329,22 @@ fun MyExpensesApp(
                 },
             )
         }
+    }
+
+    if (showAccountDialog) {
+        val account = editingAccountId?.let { id -> state.accounts.firstOrNull { it.id == id } }
+        AccountDialog(
+            account = account,
+            onDismiss = {
+                editingAccountId = null
+                showAccountDialog = false
+            },
+            onSave = { name, type, lastFour, archived ->
+                onSaveAccount(account?.id, name, type, lastFour, archived)
+                editingAccountId = null
+                showAccountDialog = false
+            },
+        )
     }
 
     backupAction?.let { action ->
@@ -425,6 +462,13 @@ private fun DashboardScreen(
                 }
             }
         }
+        val alerts = budgetAlerts(state)
+        if (alerts.isNotEmpty()) {
+            item { SectionTitle("Budget alerts", "Categories at 80% or more of their limit") }
+            items(alerts, key = { it.category.id }) { alert ->
+                BudgetAlertCard(alert)
+            }
+        }
         item {
             SectionTitle("Where it went", "Posted expenses only")
         }
@@ -442,6 +486,21 @@ private fun DashboardScreen(
                     category = category,
                     total = total,
                     maximum = categoryTotals.maxOf { it.second }.coerceAtLeast(1),
+                )
+            }
+        }
+        val merchantSpending = merchantTotals(state)
+        item { SectionTitle("Top merchants", "Your highest spending destinations") }
+        if (merchantSpending.isEmpty()) {
+            item {
+                EmptyCard("No merchant totals yet", "Merchant spending will appear after an expense is added.")
+            }
+        } else {
+            items(merchantSpending.take(5), key = { it.first }) { (merchant, total) ->
+                MerchantProgress(
+                    merchant = merchant,
+                    total = total,
+                    maximum = merchantSpending.maxOf { it.second }.coerceAtLeast(1),
                 )
             }
         }
@@ -468,6 +527,7 @@ private fun TransactionsScreen(
     onPreviousMonth: () -> Unit,
     onNextMonth: () -> Unit,
     onSearch: (String) -> Unit,
+    onReviewOnly: (Boolean) -> Unit,
     onTransactionClick: (TransactionEntity) -> Unit,
 ) {
     LazyColumn(
@@ -487,11 +547,27 @@ private fun TransactionsScreen(
                 shape = RoundedCornerShape(18.dp),
             )
         }
+        item {
+            FilterChip(
+                selected = state.reviewOnly,
+                onClick = { onReviewOnly(!state.reviewOnly) },
+                label = { Text("Needs review (${state.needsReviewCount})") },
+                leadingIcon = { Icon(Icons.Outlined.WarningAmber, null) },
+            )
+        }
         if (state.visibleTransactions.isEmpty()) {
             item {
                 EmptyCard(
-                    if (state.searchQuery.isBlank()) "No transactions" else "No matches",
-                    if (state.searchQuery.isBlank()) {
+                    if (state.reviewOnly) {
+                        "Nothing needs review"
+                    } else if (state.searchQuery.isBlank()) {
+                        "No transactions"
+                    } else {
+                        "No matches"
+                    },
+                    if (state.reviewOnly) {
+                        "Low-confidence and non-posted imports will appear here."
+                    } else if (state.searchQuery.isBlank()) {
                         "Imported SMS, Gmail and manual entries will show here."
                     } else {
                         "Try a different merchant or account search."
@@ -537,6 +613,48 @@ private fun BudgetsScreen(
             val spent = spentForCategory(state, category.id)
             val budget = state.budgets.firstOrNull { it.categoryId == category.id }
             BudgetRow(category, spent, budget, onClick = { onBudgetClick(category) })
+        }
+    }
+}
+
+@Composable
+private fun AccountsScreen(
+    state: ExpenseUiState,
+    onAddAccount: () -> Unit,
+    onAccountClick: (AccountEntity) -> Unit,
+) {
+    val active = state.accounts.filterNot(AccountEntity::isArchived)
+    val archived = state.accounts.filter(AccountEntity::isArchived)
+    LazyColumn(
+        modifier = Modifier.widthIn(max = 840.dp).fillMaxSize(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 112.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            SectionTitle(
+                "Accounts",
+                "Name the accounts detected from alerts or add one for manual entries.",
+            )
+        }
+        item {
+            Button(onClick = onAddAccount, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Outlined.Add, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Add account")
+            }
+        }
+        if (active.isEmpty()) {
+            item { EmptyCard("No active accounts", "Add an account to organize your spending.") }
+        } else {
+            items(active, key = AccountEntity::id) { account ->
+                AccountRow(account, onClick = { onAccountClick(account) })
+            }
+        }
+        if (archived.isNotEmpty()) {
+            item { SectionTitle("Archived", "Archived accounts remain attached to past transactions") }
+            items(archived, key = AccountEntity::id) { account ->
+                AccountRow(account, onClick = { onAccountClick(account) })
+            }
         }
     }
 }
@@ -809,6 +927,99 @@ private fun CategoryProgress(category: CategoryEntity, total: Long, maximum: Lon
 }
 
 @Composable
+private fun MerchantProgress(merchant: String, total: Long, maximum: Long) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(
+                merchant,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(formatMoney(total), fontWeight = FontWeight.SemiBold)
+        }
+        LinearProgressIndicator(
+            progress = { (total.toFloat() / maximum).coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
+        )
+    }
+}
+
+@Composable
+private fun BudgetAlertCard(alert: BudgetAlert) {
+    val overBudget = alert.spent > alert.budget.limitMinor
+    OutlinedCard(shape = RoundedCornerShape(18.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.WarningAmber,
+                contentDescription = null,
+                tint = if (overBudget) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.tertiary
+                },
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "${alert.category.icon}  ${alert.category.name}",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    if (overBudget) {
+                        "${formatMoney(alert.spent - alert.budget.limitMinor)} over budget"
+                    } else {
+                        "${(alert.ratio * 100).toInt()}% used · " +
+                            "${formatMoney(alert.budget.limitMinor - alert.spent)} left"
+                    },
+                    color = if (overBudget) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccountRow(account: AccountEntity, onClick: () -> Unit) {
+    OutlinedCard(onClick = onClick, shape = RoundedCornerShape(20.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.size(46.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer,
+            ) {
+                Icon(Icons.Outlined.AccountBalance, null, Modifier.padding(11.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(account.name, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    buildString {
+                        append(account.type.displayName())
+                        account.lastFour?.let { append(" · •$it") }
+                        if (account.isArchived) append(" · Archived")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun BudgetRow(
     category: CategoryEntity,
     spent: Long,
@@ -833,16 +1044,22 @@ private fun BudgetRow(
                 LinearProgressIndicator(
                     progress = { ratio.coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
-                    color = if (ratio > 1f) MaterialTheme.colorScheme.error else Color(category.color),
+                    color = if (ratio >= 0.8f) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        Color(category.color)
+                    },
                 )
                 Text(
                     if (ratio > 1f) {
                         "${formatMoney(spent - budget.limitMinor)} over budget"
+                    } else if (ratio >= 0.8f) {
+                        "Budget alert · ${(ratio * 100).toInt()}% used"
                     } else {
                         "${formatMoney(budget.limitMinor - spent)} remaining"
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (ratio > 1f) {
+                    color = if (ratio >= 0.8f) {
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -1159,6 +1376,105 @@ private fun EditTransactionDialog(
 }
 
 @Composable
+private fun AccountDialog(
+    account: AccountEntity?,
+    onDismiss: () -> Unit,
+    onSave: (String, AccountType, String?, Boolean) -> Unit,
+) {
+    var name by rememberSaveable(account?.id) { mutableStateOf(account?.name.orEmpty()) }
+    var type by rememberSaveable(account?.id) {
+        mutableStateOf(account?.type ?: AccountType.BANK)
+    }
+    var lastFour by rememberSaveable(account?.id) {
+        mutableStateOf(account?.lastFour.orEmpty())
+    }
+    var archived by rememberSaveable(account?.id) {
+        mutableStateOf(account?.isArchived ?: false)
+    }
+    val availableTypes = if (account?.type == AccountType.CASH) {
+        listOf(AccountType.CASH)
+    } else {
+        AccountType.entries.filterNot { it == AccountType.CASH }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (account == null) "Add account" else "Edit account") },
+        text = {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                item {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Account name") },
+                        singleLine = true,
+                    )
+                }
+                item {
+                    Text("Type", style = MaterialTheme.typography.labelLarge)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(availableTypes) { accountType ->
+                            FilterChip(
+                                selected = type == accountType,
+                                onClick = { type = accountType },
+                                label = { Text(accountType.displayName()) },
+                            )
+                        }
+                    }
+                }
+                if (type != AccountType.CASH) {
+                    item {
+                        OutlinedTextField(
+                            value = lastFour,
+                            onValueChange = {
+                                lastFour = it.filter(Char::isDigit).take(4)
+                            },
+                            label = { Text("Last 3 or 4 digits (optional)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                        )
+                    }
+                }
+                if (account != null && account.type != AccountType.CASH) {
+                    item {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Archive account")
+                                Text(
+                                    "Past transactions stay in your ledger",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            Switch(checked = archived, onCheckedChange = { archived = it })
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(
+                        name,
+                        type,
+                        lastFour.takeIf(String::isNotBlank),
+                        archived,
+                    )
+                },
+                enabled = name.isNotBlank() &&
+                    (lastFour.isBlank() || lastFour.length in 3..4),
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
 private fun BudgetDialog(
     category: CategoryEntity,
     currentBudget: BudgetEntity?,
@@ -1268,6 +1584,36 @@ private fun categoryTotals(state: ExpenseUiState): List<Pair<CategoryEntity, Lon
         .sortedByDescending { it.second }
 }
 
+private data class BudgetAlert(
+    val category: CategoryEntity,
+    val budget: BudgetEntity,
+    val spent: Long,
+) {
+    val ratio: Float
+        get() = spent.toFloat() / budget.limitMinor.coerceAtLeast(1)
+}
+
+private fun budgetAlerts(state: ExpenseUiState): List<BudgetAlert> {
+    val categories = state.categories.associateBy(CategoryEntity::id)
+    return state.budgets.mapNotNull { budget ->
+        val category = categories[budget.categoryId] ?: return@mapNotNull null
+        BudgetAlert(category, budget, spentForCategory(state, budget.categoryId))
+    }.filter { it.ratio >= 0.8f }
+        .sortedByDescending(BudgetAlert::ratio)
+}
+
+private fun merchantTotals(state: ExpenseUiState): List<Pair<String, Long>> =
+    state.monthTransactions
+        .filter {
+            !it.isExcluded && it.status == TransactionStatus.POSTED &&
+                (it.type == TransactionType.EXPENSE || it.type == TransactionType.CARD_PAYMENT)
+        }
+        .groupBy { it.merchant.trim().lowercase() }
+        .map { (_, transactions) ->
+            transactions.first().merchant.trim() to transactions.sumOf(TransactionEntity::amountMinor)
+        }
+        .sortedByDescending { it.second }
+
 private fun spentForCategory(state: ExpenseUiState, categoryId: String): Long =
     state.monthTransactions.filter {
         it.categoryId == categoryId &&
@@ -1275,6 +1621,9 @@ private fun spentForCategory(state: ExpenseUiState, categoryId: String): Long =
             it.status == TransactionStatus.POSTED &&
             (it.type == TransactionType.EXPENSE || it.type == TransactionType.CARD_PAYMENT)
     }.sumOf(TransactionEntity::amountMinor)
+
+private fun AccountType.displayName(): String =
+    name.lowercase().replace('_', ' ').replaceFirstChar(Char::uppercase)
 
 private val IndianLocale: Locale = Locale.Builder()
     .setLanguage("en")

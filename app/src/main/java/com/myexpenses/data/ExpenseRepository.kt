@@ -256,6 +256,7 @@ class ExpenseRepository @Inject constructor(
         name: String,
         type: AccountType,
         lastFour: String?,
+        archived: Boolean,
     ) {
         val normalizedName = name.trim()
         require(normalizedName.isNotEmpty()) { "Enter an account name" }
@@ -272,14 +273,9 @@ class ExpenseRepository @Inject constructor(
                 name = normalizedName,
                 type = type,
                 lastFour = normalizedLastFour,
+                isArchived = if (current?.id == CASH_ACCOUNT_ID) false else archived,
             ),
         )
-    }
-
-    suspend fun setAccountArchived(id: String, archived: Boolean) {
-        val account = accountDao.getById(id) ?: return
-        require(account.id != CASH_ACCOUNT_ID || !archived) { "The Cash account stays available" }
-        accountDao.upsert(account.copy(isArchived = archived))
     }
 
     suspend fun setBudget(categoryId: String, month: YearMonth, limitMinor: Long) {
