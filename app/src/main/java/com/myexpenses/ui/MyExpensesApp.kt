@@ -80,6 +80,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -701,6 +702,7 @@ private fun MonthSelector(
     onPrevious: () -> Unit,
     onNext: () -> Unit,
 ) {
+    val locale = LocalConfiguration.current.locales[0]
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -711,7 +713,7 @@ private fun MonthSelector(
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                month.month.getDisplayName(TextStyle.FULL, Locale.getDefault()),
+                month.month.getDisplayName(TextStyle.FULL, locale),
                 style = MaterialTheme.typography.titleLarge,
             )
             Text(
