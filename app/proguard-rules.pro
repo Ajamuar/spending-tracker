@@ -1,3 +1,0 @@
--keep class net.zetetic.database.** { *; }
--keepclassmembers class * extends androidx.room.RoomDatabase { *; }
--dontwarn org.conscrypt.**
