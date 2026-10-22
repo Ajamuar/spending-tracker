@@ -114,37 +114,16 @@ class Repository(private val context: Context, databaseName: String = "ledger.db
         scheduleSync()
     }
     suspend fun ingest(sender: String, body: String, timestamp: Long): Boolean {
-            val candidate = SmsParser.parse(sender, body) ?: return false
-        val detectedAccountId = if (candidate.accountHint == null) "unknown-${digest(sender).take(16)}"
-            else "sms-${digest("${sender.uppercase()}|${candidate.accountHint}|${candidate.card}").take(24)}"
-        val sourceKey = if (candidate.reference != null) digest("$detectedAccountId|${candidate.kind}|${candidate.reference}|${candidate.amount}|${candidate.direction}")
-            else digest("$sender|$timestamp|$body")
+        val candidate = SmsParser.parse(sender, body) ?: return false
+        val fallback = digest("$sender|$timestamp|$body")
         val inserted = db.withTransaction {
-            var accountId = detectedAccountId
-            val seen = mutableSetOf<String>()
-            while (true) {
-                check(seen.add(accountId)) { "Account alias cycle" }
-                accountId = dao.metadata("account-alias:$accountId") ?: break
+            val account = discoverAccount(sender, candidate)
+            if (account == null) {
+                holdSms(sender, candidate, timestamp, fallback)
+                return@withTransaction false
             }
-            val legacyKey = candidate.reference?.let { digest("$detectedAccountId|${candidate.kind}|$it|${candidate.amount}") }
-            val prior = dao.source(sourceKey) ?: legacyKey?.let { dao.source(it) }
-            if (prior != null) {
-                val advances = !prior.deleted && ((prior.status == Status.PENDING.name && candidate.status in listOf(Status.POSTED, Status.REVERSED, Status.FAILED)) ||
-                    (prior.status == Status.POSTED.name && candidate.status == Status.REVERSED))
-                if (advances) {
-                    val updated = prior.copy(status = candidate.status.name, revision = prior.revision + 1, reviewed = false, updatedAt = System.currentTimeMillis())
-                    dao.put(updated); dao.enqueue(Change(updated.id, updated.revision, payload(updated)))
-                }
-                return@withTransaction advances
-            }
-            dao.insertAccount(Account(accountId, "$sender ${candidate.accountHint ?: "(unidentified)"}", if (candidate.card) "Card" else "Bank"))
-            val entry = Entry(amount = candidate.amount, kind = candidate.kind.name, status = candidate.status.name,
-                accountId = accountId, merchant = candidate.merchant,
-                category = dao.rule(candidate.merchant.lowercase())?.category ?: "Uncategorised", time = timestamp, source = "sms",
-                sourceKey = sourceKey, reviewed = false, direction = candidate.direction)
-            dao.put(entry)
-            dao.enqueue(Change(entry.id, entry.revision, payload(entry)))
-            true
+            if (account.archived || dao.metadata("sms-track:${account.id}") != "true") return@withTransaction false
+            insertSms(sender, candidate, timestamp, fallback, account.id)
         }
         if (inserted) scheduleSync()
         return inserted
@@ -253,6 +232,8 @@ class Repository(private val context: Context, databaseName: String = "ledger.db
         db.withTransaction {
             require(dao.snapshot().isEmpty() && dao.billSnapshot().isEmpty() && dao.groupSnapshot().isEmpty() && dao.budgetSnapshot().isEmpty() && dao.ruleSnapshot().isEmpty()) { "Restore only into an empty ledger and plans. Existing data has not been changed." }
             dao.clearAccounts()
+            dao.clearSmsSettings()
+            dao.clearAccountAliases()
             accounts.forEach { dao.putAccount(it) }
             dao.putMetadata(Metadata("ledgerId", id))
             entries.forEach { dao.put(it); dao.enqueue(Change(it.id, it.revision, payload(it))) }

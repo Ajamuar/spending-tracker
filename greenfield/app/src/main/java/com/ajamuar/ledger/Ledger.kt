@@ -126,8 +126,11 @@ interface LedgerDao {
     @Query("SELECT * FROM budgets") suspend fun budgetSnapshot(): List<Budget>
     @Query("SELECT value FROM metadata WHERE `key` = :key") suspend fun metadata(key: String): String?
     @Upsert suspend fun putMetadata(metadata: Metadata)
+    @Query("SELECT * FROM metadata WHERE `key` LIKE 'sms-%'") fun smsSettings(): Flow<List<Metadata>>
     @Query("SELECT * FROM metadata WHERE `key` LIKE 'account-alias:%'") suspend fun aliases(): List<Metadata>
     @Query("DELETE FROM accounts") suspend fun clearAccounts()
+    @Query("DELETE FROM metadata WHERE `key` LIKE 'account-alias:%'") suspend fun clearAccountAliases()
+    @Query("DELETE FROM metadata WHERE `key` LIKE 'sms-%'") suspend fun clearSmsSettings()
     @Query("SELECT * FROM bills ORDER BY due") fun bills(): Flow<List<Bill>>
     @Query("SELECT * FROM bills ORDER BY due") suspend fun billSnapshot(): List<Bill>
     @Upsert suspend fun putBill(bill: Bill)
@@ -209,6 +212,7 @@ object SmsParser {
     fun parse(sender: String, body: String): SmsCandidate? {
         // Only business sender headers; never interpret personal-number messages as bank alerts.
         if (!Regex("(?:[A-Za-z]{2}-)?[A-Za-z][A-Za-z0-9]{2,15}(?:-[A-Za-z])?").matches(sender)) return null
+        if (SmsAccounts.institution(sender) == null) return null
         if (auth.containsMatchIn(body) || body.length > 10_000) return null
         val lower = body.lowercase(Locale.ROOT)
         if (Regex("\\b(?:will be|scheduled|due|minimum due|bill generated|offer|eligible)\\b").containsMatchIn(lower)) return null
@@ -234,8 +238,10 @@ object SmsParser {
                 .find(body)?.groupValues?.get(1)?.trim()?.takeIf { it.length in 2..80 &&
                     !Regex("^(?:your\\b|a/c\\b|account\\b|card\\b)", RegexOption.IGNORE_CASE).containsMatchIn(it) }
         } ?: sender
-        return SmsCandidate(value, kind, status, merchant, account.find(body)?.groupValues?.get(1),
-            "card" in lower, ref.find(body)?.groupValues?.get(1)?.uppercase(Locale.ROOT),
+        val matches = account.findAll(body).toList()
+        val identified = matches.singleOrNull()
+        return SmsCandidate(value, kind, status, merchant, identified?.groupValues?.get(1),
+            identified?.value?.contains("card", true) == true, ref.find(body)?.groupValues?.get(1)?.uppercase(Locale.ROOT),
             if (kind in listOf(Kind.INCOME, Kind.REFUND) || (kind == Kind.CARD_PAYMENT && "received" in lower) ||
                 (kind == Kind.TRANSFER && "credited" in lower && "debited" !in lower)) "in" else "out")
     }

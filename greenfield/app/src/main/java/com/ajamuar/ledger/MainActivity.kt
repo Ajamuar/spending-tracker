@@ -118,6 +118,8 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     val groups = repo.dao.groups().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val splits = repo.dao.splits().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val rules = repo.dao.rules().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val smsSettings = repo.dao.smsSettings().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    var discovery by mutableStateOf<SmsDiscovery?>(null)
     var busy by mutableStateOf(false); private set
     var message by mutableStateOf<String?>(null)
     var scanning by mutableStateOf(false); private set
@@ -131,6 +133,20 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { message = if (e is IllegalArgumentException || e is IllegalStateException) e.message ?: "Unable to complete this action" else "Unable to complete this action. Your existing data is intact." }
             finally { busy = false }
+        }
+    }
+    fun discover(days: Int) {
+        if (scanning || busy) return
+        scanJob = viewModelScope.launch {
+            scanning = true
+            scanProgress = "Looking for bank accounts and cards…"
+            try {
+                discovery = discoverSms(getApplication(), repo, days) { scanned, found ->
+                    viewModelScope.launch { scanProgress = "$scanned messages checked · $found accounts found" }
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { message = "Account discovery could not finish. Check SMS permission and try again." }
+            finally { scanning = false }
         }
     }
     fun scan(days: Int) {
@@ -160,6 +176,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     val groups by vm.groups.collectAsStateWithLifecycle()
     val splits by vm.splits.collectAsStateWithLifecycle()
     val rules by vm.rules.collectAsStateWithLifecycle()
+    val smsSettings by vm.smsSettings.collectAsStateWithLifecycle()
+    val tracked = smsSettings.filter { it.key.startsWith("sms-track:") && it.value == "true" }.map { it.key.removePrefix("sms-track:") }.toSet()
+    val held = smsSettings.mapNotNull(HeldSms::read)
+    var showSmsAccounts by remember { mutableStateOf(false) }
+    var showSmsReview by remember { mutableStateOf(false) }
     val syncState by vm.repo.state.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -328,6 +349,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
                 2 -> {
+                    item { OutlinedButton(onClick = { showSmsAccounts = true }, Modifier.fillMaxWidth()) { Text("Choose SMS accounts · ${tracked.size} selected") } }
                     item { Text("Accounts are local labels, not bank connections. SMS imports never imply a live balance.", style = MaterialTheme.typography.bodyMedium) }
                     items(accounts, key = { it.id }) { account -> SurfaceCard(onClick = { accountEditor = account }) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -370,13 +392,15 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                     item { SectionLabel("CAPTURE") }
                     item { SurfaceCard {
                         Text("Transaction SMS", style = MaterialTheme.typography.titleMedium)
-                        Text("Read bank alerts on this phone. Personal messages and OTPs are ignored; message bodies are never saved.", modifier = Modifier.padding(vertical = 10.dp))
-                        Text("All imported entries start in Needs review. Unsupported formats can be added manually.", style = MaterialTheme.typography.bodySmall)
+                        Text("Discover supported bank accounts and cards, then choose which ones to track. No account is selected automatically; message bodies are never saved.", modifier = Modifier.padding(vertical = 10.dp))
+                        Text("Only selected, active accounts can import automatically. Unidentified alerts stay outside your ledger until you review them.", style = MaterialTheme.typography.bodySmall)
                         if (vm.scanning) { Text(vm.scanProgress); TextButton(onClick = { vm.cancelScan() }) { Text("Pause scan") } }
                         else Button(onClick = {
                             if (context.checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) showScan = true
                             else permissions.launch(arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS))
-                        }) { Text("Scan transaction alerts") }
+                        }, enabled = !vm.busy) { Text("Scan transaction alerts") }
+                        TextButton(onClick = { showSmsAccounts = true }, enabled = !vm.busy && !vm.scanning) { Text("Choose SMS accounts · ${tracked.size} selected") }
+                        TextButton(onClick = { showSmsReview = true }, enabled = !vm.busy && !vm.scanning) { Text("Unmatched alerts · ${held.size}") }
                     } }
                     item { SectionLabel("YOUR DATA") }
                     item { SurfaceCard {
@@ -441,9 +465,22 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
             vm.repo.dao.putBudget(updated)
         } }
     }, { vm.action(success = { budgetEditor = null }) { vm.repo.dao.deleteBudget(budget) } }) }
-    if (showScan) AlertDialog(onDismissRequest = { showScan = false }, title = { Text("Import transaction alerts") }, text = {
-        Text("Choose a range. Existing source matches are skipped; manually edited or deleted entries stay unchanged. Wider ranges can take longer.")
-    }, confirmButton = { TextButton(onClick = { showScan = false; vm.scan(365) }) { Text("Past year") } }, dismissButton = { TextButton(onClick = { showScan = false; vm.scan(30) }) { Text("Past 30 days") } })
+    if (showScan) AlertDialog(onDismissRequest = { showScan = false }, title = { Text("Discover SMS accounts") }, text = {
+        Text("Choose a range to discover accounts and preview parsed alerts. No transactions are imported until you confirm your selection.")
+    }, confirmButton = { TextButton(onClick = { showScan = false; vm.discover(365) }) { Text("Past year") } }, dismissButton = { TextButton(onClick = { showScan = false; vm.discover(30) }) { Text("Past 30 days") } })
+    vm.discovery?.let { discovery -> SmsSelectionDialog(discovery, tracked, vm.busy, { vm.discovery = null }) { selectedAccounts ->
+        vm.action(success = { vm.discovery = null; vm.scan(discovery.days) }) {
+            vm.repo.db.withTransaction {
+                discovery.accounts.forEach { vm.repo.setSmsTracking(it.account.id, it.account.id in selectedAccounts) }
+            }
+        }
+    } }
+    if (showSmsAccounts) SmsTrackingDialog(accounts, tracked, vm.busy, { showSmsAccounts = false }) { id, enabled ->
+        vm.action { vm.repo.setSmsTracking(id, enabled) }
+    }
+    if (showSmsReview) SmsReviewDialog(held, accounts, vm.busy, { showSmsReview = false }) { key, account ->
+        vm.action { vm.repo.reviewSms(key, account) }
+    }
     if (showPairing) PairingDialog(vm.busy, { showPairing = false }) { json -> vm.action(success = { showPairing = false; vm.repo.scheduleSync(force = true) }) {
         val pairing = Pairing.parse(json)
         vm.repo.vault.write("pairing", pairing.json().toByteArray())

@@ -33,15 +33,30 @@ class LedgerTest {
         assertEquals(-50000L, purchase.copy(kind = Kind.REFUND.name).personalSpend())
         assertEquals(0L, purchase.copy(excluded = true).personalSpend())
     }
+    @Test fun accountIdentityIgnoresRoutingPrefixesButKeepsInstitutionAndType() {
+        val body = "INR 500 debited from a/c XX4821 to TEST STORE."
+        val bank = SmsParser.parse("VM-HDFCBK", body)!!
+        assertEquals(SmsAccounts.id("VM-HDFCBK", bank), SmsAccounts.id("AD-HDFCBN-S", bank))
+        assertNotEquals(SmsAccounts.id("VM-HDFCBK", bank), SmsAccounts.id("VM-ICICIB", bank))
+        assertNotEquals(SmsAccounts.id("VM-HDFCBK", bank), SmsAccounts.id("VM-HDFCBK", bank.copy(card = true)))
+        assertNull(SmsParser.parse("VM-SHOPXX", "INR 500 paid from account XX4821 to TEST STORE"))
+        val ambiguous = SmsParser.parse("VM-HDFCBK", "INR 500 debited from a/c XX4821 to account XX5912")!!
+        assertNull(ambiguous.accountHint)
+        assertNull(SmsAccounts.id("VM-HDFCBK", ambiguous))
+        val noAccount = SmsParser.parse("VM-HDFCBK", "INR 500 paid to TEST STORE")!!
+        assertNull(SmsAccounts.id("VM-HDFCBK", noAccount))
+        val repayment = SmsParser.parse("VM-HDFCBK", "INR 500 debited from a/c XX4821 towards credit card payment")!!
+        assertFalse(repayment.card)
+    }
     @Test fun parsesSyntheticBankAlertsAndRejectsAuthentication() {
-        val result = SmsParser.parse("VM-TESTBK", "Rs.249.50 debited from a/c XX4821 to TEST CAFE on 22-Oct. Ref 123456789012")!!
+        val result = SmsParser.parse("VM-HDFCBK", "Rs.249.50 debited from a/c XX4821 to TEST CAFE on 22-Oct. Ref 123456789012")!!
         assertEquals(24950L, result.amount)
         assertEquals("4821", result.accountHint)
         assertEquals("TEST CAFE", result.merchant)
         assertEquals("123456789012", result.reference)
-        assertNull(SmsParser.parse("VM-TESTBK", "OTP 123456 for INR 500 purchase"))
+        assertNull(SmsParser.parse("VM-HDFCBK", "OTP 123456 for INR 500 purchase"))
         assertNull(SmsParser.parse("9999999999", "INR 500 paid to TEST"))
-        assertNull(SmsParser.parse("VM-TESTBK", "INR 500 payment due tomorrow"))
-        assertNull(SmsParser.parse("VM-TESTBK", "INR 1,00,00 payment debited"))
+        assertNull(SmsParser.parse("VM-HDFCBK", "INR 500 payment due tomorrow"))
+        assertNull(SmsParser.parse("VM-HDFCBK", "INR 1,00,00 payment debited"))
     }
 }

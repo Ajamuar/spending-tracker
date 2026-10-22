@@ -8,7 +8,7 @@ The working name is Rupee Ledger. The design/research reference is [the greenfie
 
 - Overview with Indian-formatted rupee amounts, category spending and drill-down.
 - Manual transactions; incoming/outgoing direction separate from expense/income/transfer/card repayment/refund/investment/reimbursement classification.
-- Optional historical and incoming transactional SMS capture. Imports start unreviewed. Raw message bodies and authentication messages are not stored.
+- Optional SMS account discovery and parsed-alert previews, explicit account selection, and historical/incoming capture only for selected accounts. Imports start unreviewed; unmatched alerts wait outside the ledger for explicit assignment or dismissal. Raw message bodies and authentication messages are not stored.
 - Editable categories, tags, notes, merchant names and exact-match future merchant-category rules.
 - Date ranges and Indian financial-year selection; search, multiple-category include/exclude filters, amount/type/status/source/tag filters and sorting.
 - Bulk categorisation, related-entry links, manual duplicate comparison, deletion tombstones and deleted-entry recovery.
@@ -36,7 +36,41 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 The development APK is `app/build/outputs/apk/debug/app-debug.apk`. Instrumented checks need an emulator/device. Unit tests and fixtures use synthetic data only.
 
-Start with manual entries, or open Settings → Scan transaction alerts. You may decline SMS access. Review imported transactions and name/map accounts before relying on reports. The generic parser deliberately rejects unsupported formats instead of inventing transactions.
+Start with manual entries, or open Settings → Scan transaction alerts. You may decline SMS access.
+
+### Choose SMS accounts
+
+1. Grant SMS access and choose Past 30 days or Past year. Discovery creates account labels and previews, not transactions.
+2. Select the bank accounts/cards you want. Nothing is selected automatically. The preview shows the latest three parsed alerts per account, including amount, type, status and date. Matching counts include duplicates and previously imported alerts.
+3. Choose **Import selected accounts**. This both enables incoming SMS capture for those accounts and rescans the chosen range. Exact source matches and deleted transactions are not recreated.
+4. Use **Settings → Choose SMS accounts** or **Accounts → Choose SMS accounts** to stop/start future capture. Turning tracking off or archiving an account retains all history; it does not recall previously synced data. Re-enable and scan again to import the missed period.
+5. Check **Settings → Unmatched alerts**. Alerts without exactly one identifiable account, or with ambiguous legacy account labels, stay outside totals and sync. Explicitly assign an alert to an existing account or ignore it. This applies only to that alert; it never authorizes future unidentified messages. Ignored alerts stay ignored on an exact rescan.
+
+Supported sender headers are listed in `app/src/main/java/com/ajamuar/ledger/SmsAccounts.kt`. Unknown senders and unsupported formats are skipped; use manual entries or CSV for those banks. Matching combines institution, masked ending and bank/card type, ignoring routing prefixes and the sender's message-type suffix. Masked endings are not globally unique; use the existing duplicate-label merge flow to reconcile legacy/manual labels. Renamed legacy accounts that cannot be identified safely may also need a manual merge. No old transactions are deleted by this update; remove incorrect past entries explicitly from Activity.
+
+Review imports and account mappings before relying on reports. Tracking choices and unmatched-alert decisions are local capture settings, excluded from backups. After restoring a backup, reselect accounts and review/rescan as needed.
+
+## Develop in Android Studio
+
+Open **`/Users/ajamuar/Projects/spending-tracker/greenfield`** using File → Open. This folder contains the independent Gradle project. Opening the parent `spending-tracker` folder loads the older app instead.
+
+1. Let Gradle sync finish. Keep the checked-in wrapper and plugin versions; this build uses Gradle 8.14.3, AGP 8.13.0 and Android SDK 36.
+2. In Android Studio → Settings → Build, Execution, Deployment → Build Tools → Gradle, set **Gradle JDK** to JDK 21 (JDK 17 also works). The installed Temurin 21 is `/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home`. Use the same JDK for terminal builds. See [Android's JDK configuration guide](https://developer.android.com/build/jdks).
+3. In Tools → SDK Manager, install **Android SDK Platform 36**, **Build-Tools 36.0.0**, and **Platform-Tools** if missing. Studio should create an ignored `local.properties` pointing to your SDK. On this Mac the SDK is `/Users/ajamuar/Library/Android/sdk`.
+4. Select the **app** run configuration and **debug** build variant. If no run configuration appears after sync, create an Android App configuration for the `app` module.
+5. For your phone: enable Developer options → USB debugging, connect by USB, and accept the phone's computer authorization prompt. Select it in Studio's device dropdown. For UI work without personal SMS, use Device Manager to start an emulator (the local `Pixel_10` AVD is available). See [Android's device setup guide](https://developer.android.com/studio/run/device).
+6. Click **Run ▶**. This builds and launches **Rupee Ledger**, package `com.ajamuar.ledger`. On a phone, exercise discovery, account selection and incoming SMS capture. Emulator checks use synthetic data; they do not prove your bank's templates work.
+
+For each development cycle, edit code in `app/src/main/java/com/ajamuar/ledger`, then click Run again. Use Debug to attach breakpoints. Repeated installs with the same signing key preserve the local ledger; avoid uninstalling or clearing app storage during development. If Studio reports a signature mismatch, keep the existing app and make an encrypted backup before resolving the signing mismatch. Uninstalling erases the encrypted local ledger.
+
+From Studio's Terminal, with its current directory set to this `greenfield` folder:
+
+```sh
+./gradlew assembleDebug testDebugUnitTest lintDebug
+./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.ajamuar.ledger.RepositoryTest,com.ajamuar.ledger.SmsScreenTest,com.ajamuar.ledger.UiTest
+```
+
+The second command needs a running emulator/device and runs encrypted-database and Compose UI tests. Use a development emulator for instrumented tests, not your personal ledger. The separate TLS integration test requires disposable receiver pairing as described below. Keep parser fixtures synthetic; never log or commit actual SMS bodies, account numbers or bank exports.
 
 ## Pair a computer and deliver data to personal-finance
 
