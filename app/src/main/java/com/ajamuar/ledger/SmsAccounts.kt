@@ -15,10 +15,8 @@ object SmsAccounts {
         "BOBTXN" to "Bank of Baroda", "CANBNK" to "Canara Bank", "UNIONB" to "Union Bank",
         "FEDBNK" to "Federal Bank", "RBLBNK" to "RBL Bank", "AUBANK" to "AU Bank"
     )
-    fun institution(sender: String): String? {
-        val header = sender.uppercase(Locale.ROOT).replace(Regex("^[A-Z]{2}-"), "").replace(Regex("-[A-Z]$"), "")
-        return institutions[header]
-    }
+    fun header(sender: String): String = sender.uppercase(Locale.ROOT).replace(Regex("^[A-Z]{2}-"), "").replace(Regex("-[A-Z]$"), "")
+    fun institution(sender: String): String? = institutions[header(sender)]
     fun id(sender: String, candidate: SmsCandidate): String? = candidate.accountHint?.let {
         "sms-${digest("${institution(sender) ?: return null}|$it|${candidate.card}").take(24)}"
     }
@@ -103,7 +101,7 @@ suspend fun Repository.insertSms(sender: String, candidate: SmsCandidate, time: 
     }
     save(Entry(amount = candidate.amount, kind = candidate.kind.name, status = candidate.status.name,
         accountId = accountId, merchant = candidate.merchant,
-        category = dao.rule(candidate.merchant.lowercase())?.category ?: "Uncategorised", time = time,
+        category = dao.rule(candidate.merchant.trim().lowercase(Locale.ROOT))?.category ?: "Uncategorised", time = time,
         source = "sms", sourceKey = sourceKey, reviewed = false, direction = candidate.direction))
     return true
 }
@@ -117,7 +115,8 @@ suspend fun Repository.reviewSms(key: String, accountId: String?) {
             // Explicit review binds this structured alert only, never future unidentified alerts.
             if (dao.source(key) == null) save(Entry(amount = alert.candidate.amount, merchant = alert.candidate.merchant,
                 kind = alert.candidate.kind.name, status = alert.candidate.status.name, direction = alert.candidate.direction,
-                accountId = accountId, time = alert.time, source = "sms", sourceKey = key, reviewed = true))
+                accountId = accountId, time = alert.time, source = "sms", sourceKey = key, reviewed = true,
+                category = dao.rule(alert.candidate.merchant.trim().lowercase(Locale.ROOT))?.category ?: "Uncategorised"))
         }
         dao.putMetadata(Metadata("sms-review:$key", "ignored"))
     }

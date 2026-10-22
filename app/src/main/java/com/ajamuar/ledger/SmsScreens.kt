@@ -24,6 +24,7 @@ import java.time.Instant
                     Checkbox(preview.account.id in selected, { checked -> selected = if (checked) selected + preview.account.id else selected - preview.account.id }, enabled = !busy && !preview.account.archived, modifier = Modifier.semantics { contentDescription = "Track ${preview.account.name}" })
                     Text("${preview.account.name} · ${preview.account.type}\n${preview.count} matching alerts${if (preview.account.archived) " · Archived" else ""}")
                 }
+                if (preview.needsLearning > 0) Text("${preview.needsLearning} alerts need format setup before they can import. Select this account, then use Settings → Set up AI learning.", style = MaterialTheme.typography.bodySmall)
                 preview.samples.forEach { (time, candidate) -> Text("${Instant.ofEpochMilli(time).atZone(India).toLocalDate()} · ${candidate.merchant}\n${Money.text(candidate.amount)} · ${candidate.kind.label} · ${candidate.status.name.lowercase()}", style = MaterialTheme.typography.bodySmall) }
             }
         }

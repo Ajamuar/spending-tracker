@@ -127,6 +127,8 @@ interface LedgerDao {
     @Query("SELECT value FROM metadata WHERE `key` = :key") suspend fun metadata(key: String): String?
     @Upsert suspend fun putMetadata(metadata: Metadata)
     @Query("SELECT * FROM metadata WHERE `key` LIKE 'sms-%'") fun smsSettings(): Flow<List<Metadata>>
+    @Query("SELECT * FROM metadata WHERE `key` LIKE 'sms-pattern:%'") suspend fun smsPatterns(): List<Metadata>
+    @Query("DELETE FROM metadata WHERE `key` = :key") suspend fun deleteMetadata(key: String)
     @Query("SELECT * FROM metadata WHERE `key` LIKE 'account-alias:%'") suspend fun aliases(): List<Metadata>
     @Query("DELETE FROM accounts") suspend fun clearAccounts()
     @Query("DELETE FROM metadata WHERE `key` LIKE 'account-alias:%'") suspend fun clearAccountAliases()
@@ -205,20 +207,31 @@ data class SmsCandidate(val amount: Long, val kind: Kind, val status: Status, va
     val accountHint: String?, val card: Boolean, val reference: String?, val direction: String)
 
 object SmsParser {
-    private val amount = Regex("(?:₹|INR|Rs\\.?)\\s*([0-9][0-9,]*(?:\\.[0-9]{1,2})?)(?![0-9.])", RegexOption.IGNORE_CASE)
+    private val amount = Regex("(?:₹|INR|Rs\\.?)\\s*([0-9][0-9,]*(?:\\.[0-9]{1,2})?)(?![0-9]|\\.[0-9.])", RegexOption.IGNORE_CASE)
     private val auth = Regex("\\b(otp|passcode|pin|cvv|verification|one.time.password)\\b", RegexOption.IGNORE_CASE)
     private val account = Regex("(?:a/?c|acct|account|card)(?:\\s+(?:no\\.?|ending(?:\\s+in)?))?[ :*xX.-]*([0-9]{3,4})\\b", RegexOption.IGNORE_CASE)
     private val ref = Regex("(?:ref(?:erence)?|utr|txn)[ :#.-]*(?:no\\.?\\s*)?([A-Z0-9]{6,})\\b", RegexOption.IGNORE_CASE)
-    fun parse(sender: String, body: String): SmsCandidate? {
+    fun eligible(sender: String, body: String): Boolean {
         // Only business sender headers; never interpret personal-number messages as bank alerts.
-        if (!Regex("(?:[A-Za-z]{2}-)?[A-Za-z][A-Za-z0-9]{2,15}(?:-[A-Za-z])?").matches(sender)) return null
-        if (SmsAccounts.institution(sender) == null) return null
-        if (auth.containsMatchIn(body) || body.length > 10_000) return null
+        if (!Regex("(?:[A-Za-z]{2}-)?[A-Za-z][A-Za-z0-9]{2,15}(?:-[A-Za-z])?").matches(sender)) return false
+        if (SmsAccounts.institution(sender) == null) return false
+        if (auth.containsMatchIn(body) || body.length > 10_000) return false
         val lower = body.lowercase(Locale.ROOT)
-        if (Regex("\\b(?:will be|scheduled|due|minimum due|bill generated|offer|eligible)\\b").containsMatchIn(lower)) return null
-        val found = amount.find(body) ?: return null
+        if (Regex("\\b(?:not|never)\\s+(?:yet\\s+)?(?:debited|charged|paid|credited|received|spent)\\b").containsMatchIn(lower)) return false
+        return !Regex("\\b(?:will be|scheduled|due|minimum due|bill generated|offer|eligible)\\b").containsMatchIn(lower)
+    }
+    fun parse(sender: String, body: String, patterns: List<SmsPattern> = emptyList()): SmsCandidate? {
+        if (!eligible(sender, body)) return null
+        val applicable = patterns.filter { it.matches(sender, body) }
+        if (applicable.size > 1) {
+            val results = applicable.map { parse(sender, body, listOf(it)) }
+            return results.distinct().singleOrNull()
+        }
+        val pattern = applicable.singleOrNull()?.also { it.validate() }
+        val lower = body.lowercase(Locale.ROOT)
+        val found = amount.findAll(body).drop(pattern?.amountIndex ?: 0).firstOrNull() ?: return null
         val value = runCatching { Money.parse(found.groupValues[1]) }.getOrNull() ?: return null
-        val kind = when {
+        val kind = pattern?.kind ?: when {
             "credit card" in lower && ("payment received" in lower || "payment towards" in lower) -> Kind.CARD_PAYMENT
             Regex("\\brefund(?:ed)?\\b").containsMatchIn(lower) -> Kind.REFUND
             Regex("\\b(?:self transfer|own account)\\b").containsMatchIn(lower) -> Kind.TRANSFER
@@ -232,7 +245,7 @@ object SmsParser {
             Regex("\\b(?:pending|processing)\\b").containsMatchIn(lower) -> Status.PENDING
             else -> Status.POSTED
         }
-        val markers = if (kind in listOf(Kind.INCOME, Kind.REFUND)) listOf("from", "to", "at") else listOf("to", "at", "from")
+        val markers = if (pattern != null) listOf(pattern.marker) else if (kind in listOf(Kind.INCOME, Kind.REFUND)) listOf("from", "to", "at") else listOf("to", "at", "from")
         val merchant = markers.firstNotNullOfOrNull { marker ->
             Regex("\\b$marker\\s+(.+?)(?=\\s+(?:on|via|using|ref|txn|a/c|avl|available)\\b|[.;]|$)", RegexOption.IGNORE_CASE)
                 .find(body)?.groupValues?.get(1)?.trim()?.takeIf { it.length in 2..80 &&
@@ -240,9 +253,10 @@ object SmsParser {
         } ?: sender
         val matches = account.findAll(body).toList()
         val identified = matches.singleOrNull()
+        if (pattern?.event == "card_payment" && identified?.value?.contains("card", true) != true) return null
         return SmsCandidate(value, kind, status, merchant, identified?.groupValues?.get(1),
             identified?.value?.contains("card", true) == true, ref.find(body)?.groupValues?.get(1)?.uppercase(Locale.ROOT),
-            if (kind in listOf(Kind.INCOME, Kind.REFUND) || (kind == Kind.CARD_PAYMENT && "received" in lower) ||
+            pattern?.direction ?: if (kind in listOf(Kind.INCOME, Kind.REFUND) || (kind == Kind.CARD_PAYMENT && "received" in lower) ||
                 (kind == Kind.TRANSFER && "credited" in lower && "debited" !in lower)) "in" else "out")
     }
 }
