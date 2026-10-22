@@ -1,0 +1,6 @@
+.receiver/
+__pycache__/
+*.pyc
+*.ledgerbackup
+*.csv
+!app/schemas/**
