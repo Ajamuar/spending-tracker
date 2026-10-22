@@ -13,3 +13,9 @@ agent-tools/
 *.jks
 *.keystore
 keystore.properties
+.receiver/
+__pycache__/
+*.pyc
+*.ledgerbackup
+*.csv
+!app/schemas/**

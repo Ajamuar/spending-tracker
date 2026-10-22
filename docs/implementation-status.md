@@ -1,8 +1,8 @@
 # Greenfield implementation status
 
-22 October 2026 · independent project: `greenfield/` · working name: Rupee Ledger.
+22 October 2026 · project: repository root · working name: Rupee Ledger.
 
-This is a working first release, not a claim that the 62-surface design is fully complete or that axio has been visually reproduced. The old `app/` is unchanged. Screens are often combined into sheets rather than separate routes.
+This is a working first release, not a claim that the 62-surface design is fully complete or that axio has been visually reproduced. Rupee Ledger is the only maintained app; its source now lives in root `app/`. Screens are often combined into sheets rather than separate routes.
 
 ## Implemented
 
@@ -39,3 +39,20 @@ The development APK and tests exercise a real Android emulator. Synthetic record
 The build, 11 Kotlin tests, seven instrumented tests and five receiver tests passed. The instrumented suite includes a UI flow and rejection of an incorrect TLS certificate fingerprint while retaining pending changes. Lint has no errors; it retains non-blocking dependency/style warnings and the deliberate self-signed-certificate pinning warning.
 
 Receiver credentials stay outside source control. Financial records, SMS/email bodies and statements are absent from fixtures. The unrelated existing `.DS_Store` file was left alone.
+
+
+## SMS account selection update — 22 October 2026
+
+- Historical scans discover accounts and preview up to three parsed alerts per account before any import. All new accounts default off; confirmation explicitly enables selected accounts.
+- Both historical and incoming ingestion check tracking and archive state before saving transactions or outbox changes. Turning tracking off retains existing history.
+- Sender routing prefixes/suffixes are normalized; account identity uses institution, masked ending and bank/card type. Existing legacy labels/source fingerprints are reused where unambiguous; manual account merge resolves ambiguous or renamed labels.
+- Supported institution headers are explicitly limited in `SmsAccounts.kt`. Unknown headers, authentication and promotional/due messages are skipped. Alerts without one safe account match enter an encrypted, structured review queue outside totals/sync; bodies are never retained. Review supports explicit per-alert account assignment or durable ignore.
+- Capture settings and unresolved/ignored alerts are not in backups. Restore clears capture settings and requires reselection. Existing incorrectly imported history is not automatically removed.
+- Android Studio development instructions are in the root `README.md`; open the `spending-tracker` repository root.
+- Verification for this update: debug APK build, 12 JVM tests and 11 emulator tests passed with no failures or skips. Android lint has zero errors and 24 warnings. The unchanged Python receiver and optional TLS integration test were not rerun. Real-phone SMS templates remain unverified.
+
+## Repository layout consolidation — 22 October 2026
+
+Rupee Ledger now occupies the repository root (`app/`, `desktop/` and the Gradle wrapper). The former My Expenses source, schemas, version catalog and downloadable APK have been removed. The application ID, schema history and signing configuration of Rupee Ledger are unchanged. Open the repository root in Android Studio; builds and test commands run there.
+
+Verification from the consolidated root: debug build, 12 JVM tests, 11 emulator tests and five Python receiver tests passed with no failures/skips. Android lint reports zero errors and 24 warnings. The optional paired TLS test was not rerun.
