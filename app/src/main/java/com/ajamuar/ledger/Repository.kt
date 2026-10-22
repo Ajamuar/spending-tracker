@@ -114,7 +114,7 @@ class Repository(private val context: Context, databaseName: String = "ledger.db
         scheduleSync()
     }
     suspend fun ingest(sender: String, body: String, timestamp: Long): Boolean {
-        val candidate = SmsParser.parse(sender, body) ?: return false
+        val candidate = parseSms(sender, body) ?: return false
         val fallback = digest("$sender|$timestamp|$body")
         val inserted = db.withTransaction {
             val account = discoverAccount(sender, candidate)

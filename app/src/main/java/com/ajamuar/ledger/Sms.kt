@@ -28,10 +28,10 @@ class SmsReceiver : BroadcastReceiver() {
     }
 }
 
-data class SmsPreview(val account: Account, val count: Int, val samples: List<Pair<Long, SmsCandidate>>)
+data class SmsPreview(val account: Account, val count: Int, val samples: List<Pair<Long, SmsCandidate>>, val needsLearning: Int = 0)
 data class SmsDiscovery(val days: Int, val scanned: Int, val accounts: List<SmsPreview>)
 
-private suspend fun readInbox(context: Context, since: Long, consume: suspend (String, String, Long) -> Unit): Int {
+internal suspend fun readInbox(context: Context, since: Long, consume: suspend (String, String, Long) -> Unit): Int {
     check(context.checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) { "Grant SMS access or use manual entries" }
     var scanned = 0
     context.contentResolver.query(Telephony.Sms.Inbox.CONTENT_URI, arrayOf("address", "body", "date", "date_sent"), "date >= ?", arrayOf(since.toString()), "date ASC")?.use { cursor ->
@@ -51,14 +51,16 @@ suspend fun discoverSms(context: Context, repo: Repository, days: Int, progress:
     val scanned = readInbox(context, System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(days.toLong())) { sender, body, time ->
         checked++
         if (checked % 50 == 0) progress(checked, accounts.size)
-        val candidate = SmsParser.parse(sender, body)
+        val parsed = repo.parseSms(sender, body)
+        val candidate = parsed ?: smsChoices(sender, body).firstOrNull()?.candidate
         if (candidate != null) repo.db.withTransaction {
             val account = repo.discoverAccount(sender, candidate)
-            if (account == null) repo.holdSms(sender, candidate, time, digest("$sender|$time|$body"))
-            else {
+            if (account == null && parsed != null) repo.holdSms(sender, candidate, time, digest("$sender|$time|$body"))
+            else if (account != null) {
                 val previous = accounts[account.id]
                 accounts[account.id] = SmsPreview(account, (previous?.count ?: 0) + 1,
-                    ((previous?.samples ?: emptyList()) + (time to candidate)).takeLast(3))
+                    ((previous?.samples ?: emptyList()) + (if (parsed != null) listOf(time to parsed) else emptyList())).takeLast(3),
+                    (previous?.needsLearning ?: 0) + if (parsed == null) 1 else 0)
             }
         }
     }

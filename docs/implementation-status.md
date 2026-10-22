@@ -56,3 +56,14 @@ Receiver credentials stay outside source control. Financial records, SMS/email b
 Rupee Ledger now occupies the repository root (`app/`, `desktop/` and the Gradle wrapper). The former My Expenses source, schemas, version catalog and downloadable APK have been removed. The application ID, schema history and signing configuration of Rupee Ledger are unchanged. Open the repository root in Android Studio; builds and test commands run there.
 
 Verification from the consolidated root: debug build, 12 JVM tests, 11 emulator tests and five Python receiver tests passed with no failures/skips. Android lint reports zero errors and 24 warnings. The optional paired TLS test was not rerun.
+
+
+## Optional OpenAI rules — 22 October 2026
+
+- Settings now supports a masked, Keystore-encrypted user-owned OpenAI key, explicit redacted previews, bounded paid requests and per-suggestion approval. No API key, original SMS, amount, account ending, reference, date or note enters model input; merchant names are shared visibly for classification.
+- Uses the official Responses API with strict structured outputs, `store: false`, no tools/redirects/retries and a 4,000-output-token cap. Unknown IDs, malformed/incomplete/refused responses and stale merchant rules cannot apply changes.
+- AI selects from local fixed-trigger, currency-occurrence and merchant-marker options. Saved formats are scoped by recognised header and redacted-structure hash. New bank headers/field syntaxes still require parser support. Account discovery can list recognised accounts with unsupported wording without importing those alerts.
+- Approved merchant rules categorise future incoming/historical SMS locally; applying suggestions updates only unreviewed, uncategorised SMS entries in selected active accounts. Reviewed/manual classifications, amounts, types, selection and original history are preserved. Correcting a previously wrong amount/type still requires explicit reconciliation.
+- Learned formats and the key are excluded from backup/sync; merchant category rules remain backed up. Keys can be removed independently of rules. No background AI calls are scheduled.
+- The shared amount parser now accepts a sentence-ending period after a currency value while continuing to reject extra fractional digits.
+- Verification: debug build, 17 JVM tests and 16 emulator tests passed with zero failures/skips. Android lint reports zero errors and 24 warnings. AI transport was exercised with a fake HTTPS connection; no real key, live OpenAI request or paid API call was used. The unchanged desktop receiver/TLS integration was not rerun. Automated device tests explicitly targeted the emulator, not the connected phone.

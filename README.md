@@ -9,7 +9,7 @@ The working name is Rupee Ledger. The design/research reference is [the greenfie
 - Overview with Indian-formatted rupee amounts, category spending and drill-down.
 - Manual transactions; incoming/outgoing direction separate from expense/income/transfer/card repayment/refund/investment/reimbursement classification.
 - Optional SMS account discovery and parsed-alert previews, explicit account selection, and historical/incoming capture only for selected accounts. Imports start unreviewed; unmatched alerts wait outside the ledger for explicit assignment or dismissal. Raw message bodies and authentication messages are not stored.
-- Editable categories, tags, notes, merchant names and exact-match future merchant-category rules.
+- Editable categories, tags, notes, merchant names and exact-match future merchant-category rules. Optional OpenAI learning suggests bounded SMS formats and merchant categories for approval; approved rules run locally.
 - Date ranges and Indian financial-year selection; search, multiple-category include/exclude filters, amount/type/status/source/tag filters and sorting.
 - Bulk categorisation, related-entry links, manual duplicate comparison, deletion tombstones and deleted-entry recovery.
 - Local accounts, opening balances, dated balance observations, provisional calculated balances and account-label reassignment for subsequent SMS imports.
@@ -50,6 +50,19 @@ Supported sender headers are listed in `app/src/main/java/com/ajamuar/ledger/Sms
 
 Review imports and account mappings before relying on reports. Tracking choices and unmatched-alert decisions are local capture settings, excluded from backups. After restoring a backup, reselect accounts and review/rescan as needed.
 
+## Optional OpenAI learning
+
+1. In **Settings → Scan transaction alerts**, discover and select your accounts. Accounts with recognisable field syntax but unknown transaction wording can appear with “need format setup”; those alerts are not imported until a format is approved.
+2. Create your own key at [OpenAI API keys](https://platform.openai.com/api-keys), enable API billing, then open **Settings → Set up AI learning** and paste it into **OpenAI API key → Save key**. ChatGPT subscription billing is separate. Saving a key sends no request.
+3. Choose **Prepare last 30 days · preview only**. The app rereads supported bank alerts from Android for selected active accounts. It keeps at most 20 distinct redacted message structures in memory and includes at most 50 merchant names from those examples and unreviewed, uncategorised SMS transactions. It never saves original bodies. Personal-number senders, authentication messages and unselected accounts are excluded.
+4. Review the structures and merchant names, then choose **Send preview to OpenAI · uses credits**. Only the displayed redacted structures, bounded parsing choices and redacted merchant names are sent. Account endings, currency values, references, dates, notes and account mappings stay on the phone. Merchant names can still identify a person or business; inspect the preview before sending. The app calls the fixed `https://api.openai.com/v1/responses` endpoint using `gpt-5.6-terra`, with `store: false`, no tools, no automatic retry and a 4,000-output-token cap. OpenAI retention policies still apply; `store: false` is not a zero-retention guarantee. [Responses structured-output documentation](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses).
+5. Review the suggested formats and categories; deselect anything incorrect, then choose **Apply selected rules**. A format shows the actual local example amount/merchant and which currency occurrence it would use. Model output can select only locally generated options; it cannot install arbitrary regexes or code, register new bank senders, change account selection, or rewrite existing amounts/types. Format matching is scoped to a recognised bank header and a hash of the redacted structure, so changed structures may need another learning pass.
+6. Scan again to import past alerts with approved formats. Merchant rules automatically categorise future SMS and, on approval, currently unreviewed/uncategorised SMS entries in selected active accounts. Reviewed or manually categorised entries are preserved. Earlier incorrect amounts/types need explicit review; rescanning after correcting a format can produce a new source fingerprint rather than repairing an old incorrect entry.
+
+The key is encrypted with the existing Android Keystore vault, never logged or included in the ledger, exports, backups or computer sync. The AI dialogs block screenshots and the key is masked. **Remove key** stops future requests while retaining approved local rules. Delete an approved format from AI settings, or a merchant rule from Settings, to stop its future use; removing a rule does not undo earlier classifications.
+
+Learned format settings are excluded from backups and cleared on restore, like SMS tracking settings. Approved merchant-category rules are included in encrypted ledger backups. No background AI request is scheduled: each paid request requires the send button. Errors, refusals, incomplete responses, invalid IDs and stale merchant-rule changes apply no suggestions. A credit/output limit is not a guaranteed monetary spending cap; API usage is billed by OpenAI.
+
 ## Develop in Android Studio
 
 Open **`/Users/ajamuar/Projects/spending-tracker`** using File → Open. Rupee Ledger now lives at the repository root. If Android Studio still has the former `greenfield` project open, close it and reopen this root folder.
@@ -67,10 +80,10 @@ From Studio's Terminal, with its current directory set to the repository root:
 
 ```sh
 ./gradlew assembleDebug testDebugUnitTest lintDebug
-./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.ajamuar.ledger.RepositoryTest,com.ajamuar.ledger.SmsScreenTest,com.ajamuar.ledger.UiTest
+ANDROID_SERIAL=emulator-5554 ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.ajamuar.ledger.RepositoryTest,com.ajamuar.ledger.SmsScreenTest,com.ajamuar.ledger.UiTest,com.ajamuar.ledger.AiTest,com.ajamuar.ledger.AiScreenTest
 ```
 
-The second command needs a running emulator/device and runs encrypted-database and Compose UI tests. Use a development emulator for instrumented tests, not your personal ledger. The separate TLS integration test requires disposable receiver pairing as described below. Keep parser fixtures synthetic; never log or commit actual SMS bodies, account numbers or bank exports.
+The second command targets emulator-5554 specifically and runs encrypted-database, fake OpenAI transport and Compose UI tests. Change the serial if your development emulator uses a different one. Use a development emulator for instrumented tests, not your personal ledger. The separate TLS integration test requires disposable receiver pairing as described below. Keep parser fixtures synthetic; never log or commit actual SMS bodies, account numbers or bank exports.
 
 ## Pair a computer and deliver data to personal-finance
 

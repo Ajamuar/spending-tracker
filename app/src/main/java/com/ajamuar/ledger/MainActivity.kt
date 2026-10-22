@@ -181,6 +181,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     val held = smsSettings.mapNotNull(HeldSms::read)
     var showSmsAccounts by remember { mutableStateOf(false) }
     var showSmsReview by remember { mutableStateOf(false) }
+    var showAi by remember { mutableStateOf(false) }
     val syncState by vm.repo.state.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -402,6 +403,11 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
                         TextButton(onClick = { showSmsAccounts = true }, enabled = !vm.busy && !vm.scanning) { Text("Choose SMS accounts · ${tracked.size} selected") }
                         TextButton(onClick = { showSmsReview = true }, enabled = !vm.busy && !vm.scanning) { Text("Unmatched alerts · ${held.size}") }
                     } }
+                    item { SurfaceCard {
+                        Text("AI pattern learning & categories", style = MaterialTheme.typography.titleMedium)
+                        Text("Use your OpenAI API key to suggest SMS formats and merchant categories. Preview shared data and approve rules before they run locally.", modifier = Modifier.padding(vertical = 10.dp))
+                        OutlinedButton(enabled = !vm.busy && !vm.scanning, onClick = { showAi = true }) { Text("Set up AI learning") }
+                    } }
                     item { SectionLabel("YOUR DATA") }
                     item { SurfaceCard {
                         Text("Personal-finance sync", style = MaterialTheme.typography.titleMedium)
@@ -481,6 +487,7 @@ class LedgerViewModel(application: Application) : AndroidViewModel(application) 
     if (showSmsReview) SmsReviewDialog(held, accounts, vm.busy, { showSmsReview = false }) { key, account ->
         vm.action { vm.repo.reviewSms(key, account) }
     }
+    if (showAi) AiSettingsDialog(vm.repo, smsSettings) { showAi = false }
     if (showPairing) PairingDialog(vm.busy, { showPairing = false }) { json -> vm.action(success = { showPairing = false; vm.repo.scheduleSync(force = true) }) {
         val pairing = Pairing.parse(json)
         vm.repo.vault.write("pairing", pairing.json().toByteArray())

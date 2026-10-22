@@ -171,5 +171,5 @@ import java.time.LocalDate
             Picker("Category", category, Categories.map { it to it }) { category = it }
             Text("Case-insensitive exact match. Existing entries and your manual corrections stay unchanged.")
         }
-    }, confirmButton = { TextButton(enabled = merchant.isNotBlank() && merchant.length <= 120, onClick = { save(MerchantRule(merchant.trim().lowercase(), category)) }) { Text("Save rule") } }, dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
+    }, confirmButton = { TextButton(enabled = merchant.isNotBlank() && merchant.length <= 120, onClick = { save(MerchantRule(merchant.trim().lowercase(java.util.Locale.ROOT), category)) }) { Text("Save rule") } }, dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
 }

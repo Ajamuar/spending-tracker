@@ -17,9 +17,10 @@ class SmsScreenTest {
         var confirmed: Set<String>? = null
         ui.runOnUiThread {
             ui.activity.setContent { MaterialTheme {
-                SmsSelectionDialog(SmsDiscovery(30, 5, listOf(SmsPreview(account, 2, listOf(100000L to candidate)))) , emptySet(), false, {}, { confirmed = it })
+                SmsSelectionDialog(SmsDiscovery(30, 5, listOf(SmsPreview(account, 2, listOf(100000L to candidate), needsLearning = 1))) , emptySet(), false, {}, { confirmed = it })
             } }
         }
+        ui.onNodeWithText("1 alerts need format setup", substring = true).assertExists()
         ui.onNodeWithText("Import selected accounts").assertIsNotEnabled()
         ui.onNode(isToggleable()).assertIsOff().performClick().assertIsOn()
         ui.runOnIdle { assertNull(confirmed) }
